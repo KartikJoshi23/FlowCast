@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Node / build
+node_modules/
+dist/
+.netlify/
+
+# Secrets (never commit API keys)
+.env
+.env.*
+!.env.example
+
+# Kaggle download extras that the project does not use (only FMCG_2022_2024.csv is needed)
+Dataset/batch_*.parquet
+Dataset/df_weekly_*.csv
+Dataset/weekly_df_final_*.csv
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Local tooling
+.claude/

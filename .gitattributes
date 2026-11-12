@@ -1,0 +1,4 @@
+# Normalise line endings so the generated engine (and its SHA-256 fingerprint) is identical everywhere.
+* text=auto eol=lf
+*.png binary
+*.parquet binary

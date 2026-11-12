@@ -1,0 +1,61 @@
+# Netlify configuration for the FlowCast dashboard (Vite + React app in app/, one serverless function).
+
+[build]
+  base = "app"                      # the Vite project lives in app/
+  command = "npm run build"
+  publish = "dist"                  # relative to base -> app/dist
+  functions = "netlify/functions"   # relative to base -> app/netlify/functions (POST /api/interpret)
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Local development with functions: `netlify dev` (Vite on 5173 behind the Netlify proxy on 8888).
+[dev]
+  command = "npm run dev"
+  targetPort = 5173
+  port = 8888
+  framework = "#custom"
+  autoLaunch = false
+
+# Security headers. Pyodide (Python on WebAssembly) is loaded from jsDelivr and needs
+# 'wasm-unsafe-eval' to compile WebAssembly; no cross-origin isolation headers are used, because
+# the engine does not need SharedArrayBuffer and COEP would block the CDN.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+# Hashed build assets never change -> cache for a year.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Data and engine files change with each notebook export -> short cache.
+[[headers]]
+  for = "/data/*"
+  [headers.values]
+    Cache-Control = "public, max-age=300"
+
+[[headers]]
+  for = "/engine/*"
+  [headers.values]
+    Cache-Control = "public, max-age=300"
+
+# Missing assets must be real 404s, never the HTML shell (an old page asking for an old chunk
+# would otherwise receive HTML as JavaScript). Existing files are served first.
+[[redirects]]
+  from = "/assets/*"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/data/*"
+  to = "/404.html"
+  status = 404

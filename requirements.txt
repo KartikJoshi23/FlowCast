@@ -1,0 +1,17 @@
+# Notebook / engine environment.
+# Scientific stack pinned to the exact versions shipped in Pyodide 314.0.7 (Python 3.14),
+# so the notebook and the in-browser dashboard engine run identical code on identical libraries.
+numpy==2.4.6
+pandas==3.0.2
+scipy==1.18.0
+scikit-learn==1.8.0
+statsmodels==0.14.6
+xgboost==2.1.4
+
+# Notebook-only tooling (not needed by the browser engine)
+matplotlib==3.10.*
+anthropic>=2.8,<3
+ipykernel
+nbformat
+nbclient
+pytest

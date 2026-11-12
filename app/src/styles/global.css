@@ -1,0 +1,133 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   "Deep Current" design tokens: a dark, aquatic theme for a beverage brand.
+   Data colours follow the validated dark-mode categorical palette (one hue per
+   model, fixed everywhere); status colours are reserved for good / warning /
+   serious / critical and always ship with an icon or label.
+   --------------------------------------------------------------------------- */
+@theme {
+  --font-sans: "Inter Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  --color-abyss: #050a12;
+  --color-deep: #08111d;
+  --color-current: #0c1a2b;
+  --color-ink-1: #eef4fb;
+  --color-ink-2: #b4c3d6;
+  --color-ink-3: #7f90a6;
+  --color-accent: #4fd6e8;
+  --color-accent-soft: #7cc4ff;
+
+  --color-good: #0ca30c;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
+
+  --color-m-actual: #f0efec;
+  --color-m-naive: #3987e5;
+  --color-m-snaive: #d95926;
+  --color-m-arima: #199e70;
+  --color-m-rf: #c98500;
+  --color-m-xgb: #d55181;
+}
+
+:root {
+  color-scheme: dark;
+  --glass: rgba(14, 30, 50, 0.58);
+  --glass-strong: rgba(17, 36, 60, 0.78);
+  --glass-border: rgba(150, 200, 255, 0.11);
+  --glass-highlight: rgba(255, 255, 255, 0.055);
+  --hairline: rgba(150, 200, 255, 0.09);
+  --focus: #4fd6e8;
+}
+
+html,
+body {
+  background-color: var(--color-abyss);
+  color: var(--color-ink-1);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(1100px 620px at 12% -8%, rgba(42, 120, 214, 0.20), transparent 62%),
+    radial-gradient(900px 520px at 92% 4%, rgba(79, 214, 232, 0.12), transparent 60%),
+    radial-gradient(1200px 800px at 50% 120%, rgba(25, 158, 112, 0.10), transparent 60%),
+    linear-gradient(180deg, #060c16 0%, #050a12 55%, #04080f 100%);
+  background-attachment: fixed;
+}
+
+/* Light-through-water caustics: a slow, subtle drift (pure CSS, disabled for reduced motion). */
+.caustics {
+  position: fixed;
+  inset: -20%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.35;
+  background:
+    radial-gradient(40% 30% at 30% 40%, rgba(124, 196, 255, 0.07), transparent 70%),
+    radial-gradient(35% 25% at 70% 60%, rgba(79, 214, 232, 0.06), transparent 70%);
+  filter: blur(30px);
+  animation: drift 38s ease-in-out infinite alternate;
+}
+
+@keyframes drift {
+  from { transform: translate3d(-2%, -1%, 0) scale(1); }
+  to { transform: translate3d(2%, 2%, 0) scale(1.06); }
+}
+
+.glass {
+  background: linear-gradient(180deg, var(--glass-highlight), transparent 38%), var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  box-shadow: 0 18px 40px -24px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.glass-strong {
+  background: linear-gradient(180deg, var(--glass-highlight), transparent 40%), var(--glass-strong);
+}
+
+.hairline {
+  border-color: var(--hairline);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Indeterminate progress shimmer for the engine loader. */
+.shimmer {
+  background: linear-gradient(90deg, transparent, rgba(124, 196, 255, 0.55), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from { background-position: -40% 0; }
+  to { background-position: 140% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caustics,
+  .shimmer {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

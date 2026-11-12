@@ -90,7 +90,7 @@ app/                                           dashboard (Vite + React 19 + Type
   netlify/functions/interpret.mts              the LLM endpoint
   netlify/lib/                                 validation, grounding, provider, limits, handler (+ tests)
   scripts/pyodide-parity.mjs                   WebAssembly <-> notebook parity check
-docs/                                          Phase 2 plan (with audit), verification record
+docs/VERIFICATION.md                           test results, live checks and final audit
 netlify.toml                                   build, function, security headers
 ```
 

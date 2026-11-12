@@ -15,10 +15,12 @@ dist/
 .env.*
 !.env.example
 
-# Kaggle download extras that the project does not use (only FMCG_2022_2024.csv is needed)
-Dataset/batch_*.parquet
-Dataset/df_weekly_*.csv
-Dataset/weekly_df_final_*.csv
+# Kaggle download extras (only FMCG_2022_2024.csv is used)
+Dataset/*
+!Dataset/FMCG_2022_2024.csv
+
+# Local copy of the notebook summary for pasting into Colab
+docs/notebook_final_summary.md
 
 # OS / editor
 .DS_Store

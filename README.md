@@ -163,12 +163,12 @@ See [`docs/VERIFICATION.md`](docs/VERIFICATION.md) for the results.
 3. **Add the free LLM key.** The key is a password for the AI service, so it is stored in Netlify, never in the code or on GitHub. Only the server-side function can read it.
    - Get a free key at [build.nvidia.com](https://build.nvidia.com): sign in, click **Get API Key** (on any model page), and copy the key (it starts with `nvapi-`).
    - In Netlify: *Project configuration → Environment variables → Add a variable*. Key `NVIDIA_API_KEY`, value = your key, tick **Contains secret values**, scope **Functions**, all deploy contexts.
-   - Optional: `LLM_MODEL` to choose NVIDIA models (default: `openai/gpt-oss-20b`, then `deepseek-ai/deepseek-v4.1-flash`, `z-ai/glm-5.3-flash`, `nvidia/nemotron-3-super-120b-a12b`; a retired, failing or slow model is skipped automatically so the call fits Netlify's ~30 s limit), `LLM_DAILY_CAP` (default 200), `LLM_PER_MINUTE` (default 6). A paid `ANTHROPIC_API_KEY` also works and is used only if no NVIDIA key is set.
+   - Optional: `LLM_MODEL` to choose NVIDIA models (default: five current models asked in parallel, the first valid answer wins; retired models are skipped), `LLM_DAILY_CAP` (default 200), `LLM_PER_MINUTE` (default 6). A paid `ANTHROPIC_API_KEY` also works and is used only if no NVIDIA key is set.
    - Then **Deploys → Trigger deploy**: environment variables apply to new deploys only.
    - Without any key the dashboard still works and shows the labelled rule-based interpretation.
 4. **Check the live site:**
    - The status bar reaches *Engine verified · matches notebook*.
-   - *AI Interpretation* shows "LLM · openai/gpt-oss-20b" with the grounding badge.
+   - *AI Interpretation* shows "LLM · <model name>" with the grounding badge.
    - *Close Aug 2023* updates every view.
 5. **Mind the credits.** On Netlify's credit-based Free plan each production deploy costs 15 of the 300 monthly credits, while deploy previews are free. Pyodide loads from jsDelivr, so it uses no Netlify bandwidth.
 

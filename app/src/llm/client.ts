@@ -2,7 +2,7 @@ import type { Facts, GroundingResult, Interpretation } from "../data/types";
 
 export const INTERPRET_URL = "/api/interpret";
 /** Total wait for an interpretation, including the background run on slow free endpoints. */
-export const CLIENT_TIMEOUT_MS = 150_000;
+export const CLIENT_TIMEOUT_MS = 260_000;
 export const POLL_INTERVAL_MS = 2_500;
 
 export interface InterpretSuccess {
@@ -41,7 +41,7 @@ export async function requestInterpretation(facts: Facts, signal?: AbortSignal):
     });
   } catch (error) {
     if (signal?.aborted) return { ok: false, code: "cancelled", message: "Superseded by newer data." };
-    if (timeout.aborted) return { ok: false, code: "timeout", message: "The LLM did not answer within 150 seconds." };
+    if (timeout.aborted) return { ok: false, code: "timeout", message: "The LLM did not answer within 260 seconds." };
     return { ok: false, code: "network", message: error instanceof Error ? error.message : "Network error." };
   }
   let outcome = await readOutcome(response);
@@ -53,7 +53,7 @@ export async function requestInterpretation(facts: Facts, signal?: AbortSignal):
       response = await fetch(`${INTERPRET_URL}?job=${encodeURIComponent(job)}`, { method: "GET", signal: combined });
     } catch (error) {
       if (signal?.aborted) return { ok: false, code: "cancelled", message: "Superseded by newer data." };
-      if (timeout.aborted) return { ok: false, code: "timeout", message: "The LLM did not answer within 150 seconds." };
+      if (timeout.aborted) return { ok: false, code: "timeout", message: "The LLM did not answer within 260 seconds." };
       return { ok: false, code: "network", message: error instanceof Error ? error.message : "Network error." };
     }
     outcome = await readOutcome(response);

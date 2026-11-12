@@ -60,8 +60,8 @@ export async function buildDeps(mode: "request" | "background", requestUrl: stri
     dailyCap: positiveInt(process.env.LLM_DAILY_CAP, 200),
   });
 
-  const timeoutMs = mode === "background" ? 150_000 : 25_000;
-  const perModelMs = mode === "background" ? 75_000 : 14_000;
+  const timeoutMs = mode === "background" ? 240_000 : 25_000;
+  const perModelMs = mode === "background" ? 240_000 : 14_000;
 
   const jobs: JobRunner | undefined = blobs && apiKey
     ? {
@@ -88,7 +88,7 @@ export async function buildDeps(mode: "request" | "background", requestUrl: stri
     now: () => new Date(),
     jobs,
     callModel: (facts) => provider === "nvidia"
-      ? interpretWithNvidia(facts, { apiKey: apiKey ?? "", model, timeoutMs, perModelMs })
+      ? interpretWithNvidia(facts, { apiKey: apiKey ?? "", model, timeoutMs, perModelMs, parallel: mode === "background" })
       : interpretWithClaude(facts, { apiKey: apiKey ?? "", model, timeoutMs }),
   };
 }

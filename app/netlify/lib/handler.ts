@@ -22,7 +22,7 @@ import { ProviderError, type ProviderErrorCode, type ProviderResult } from "./pr
 
 export const MAX_BODY_BYTES = 64 * 1024;
 /** A pending job older than this is treated as lost (the background function died) and restarted. */
-export const JOB_STALE_MS = 5 * 60_000;
+export const JOB_STALE_MS = 6 * 60_000;
 
 export interface InterpretSuccess {
   interpretation: Interpretation;

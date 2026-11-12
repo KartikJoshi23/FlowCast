@@ -63,7 +63,48 @@ describe("NVIDIA provider", () => {
   it("names each model's outcome and time when all fail", async () => {
     const fetchImpl = vi.fn(async () => reply(500, {}));
     await expect(interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "a/one,b/two" }))
-      .rejects.toThrow(/one: unavailable after \d+\.\d s; two: unavailable after/);
+      .rejects.toThrow(/one: HTTP 500; two: HTTP 500/);
+  });
+
+  it("parallel mode returns the first valid answer and cancels the others", async () => {
+    let cancelled = false;
+    const fetchImpl = vi.fn((_u: string, init: RequestInit) => {
+      const body = String(init.body);
+      if (body.includes('"model":"slow/model"')) {
+        return new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => {
+          cancelled = true;
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        }));
+      }
+      return Promise.resolve(ok(JSON.stringify(sample.rule_based)));
+    });
+    const result = await interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "slow/model,fast/model", parallel: true });
+    expect(result.interpretation).toEqual(sample.rule_based);
+    expect(cancelled).toBe(true);
+  });
+
+  it("parallel mode reports every model's outcome when all fail", async () => {
+    const fetchImpl = vi.fn(async (_u: string, init: RequestInit) =>
+      String(init.body).includes("gone/model") ? reply(410, {}) : ok("not json"));
+    await expect(interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "gone/model,bad/model", parallel: true }))
+      .rejects.toThrow(/model: model retired \(HTTP 410\).*model: answer not in the expected JSON format|model: answer not in the expected JSON format.*model: model retired/);
+  });
+
+  it("reads a streamed (server-sent events) answer", async () => {
+    const text = JSON.stringify(sample.rule_based);
+    const chunks = [text.slice(0, 40), text.slice(40)].map((piece) =>
+      `data: ${JSON.stringify({ model: "openai/gpt-oss-20b", choices: [{ delta: { content: piece }, finish_reason: null }] })}
+
+`);
+    const sse = chunks.join("") + `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}
+
+data: [DONE]
+
+`;
+    const fetchImpl = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }));
+    const result = await interpretWithNvidia(sample.facts, opts(fetchImpl));
+    expect(result.interpretation).toEqual(sample.rule_based);
+    expect(result.model).toBe("openai/gpt-oss-20b");
   });
 
   it("stops at once on a rejected key", async () => {

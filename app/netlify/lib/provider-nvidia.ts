@@ -4,9 +4,12 @@
  * - Same prompt and JSON schema as the Claude provider (from the notebook's `prompt` cell).
  * - Asks the model to skip its slow thinking phase; if a model rejects that option the request is
  *   retried once without it. The prompt carries the JSON schema and the server validates the answer.
- * - Models are tried in order: a retired (HTTP 404/410), failing, malformed or slow model (per-model time
- *   limit) moves on to the next one, all within one overall deadline below Netlify's function limit.
- * - Every failure becomes a ProviderError, so the dashboard falls back to the rule-based text.
+ * - The answer is streamed, so a failure can say whether the model sent nothing or was just slow.
+ * - Free endpoints queue unpredictably, so in "parallel" mode (the background function) all models
+ *   are asked at once and the first valid answer wins; the others are cancelled. In sequential mode
+ *   (short request function) the models are tried in order within the deadline.
+ * - Retired models (HTTP 404/410) are skipped. Every failure becomes a ProviderError, so the
+ *   dashboard falls back to the rule-based text.
  */
 import type { Facts } from "./facts-validation";
 import { parseInterpretation } from "./interpretation";
@@ -14,14 +17,12 @@ import prompt from "./interpretation-prompt.json";
 import { ProviderError, type ProviderResult } from "./provider-anthropic";
 
 export const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-/**
- * Tried in order: NVIDIA retires catalog models (HTTP 404/410), so the next one is used automatically.
- * LLM_MODEL may override this with one model or a comma-separated list.
- */
+/** Default models (LLM_MODEL may override with one model or a comma-separated list). */
 export const NVIDIA_DEFAULT_MODELS = [
-  "openai/gpt-oss-20b",                  // small and fast: fits Netlify's ~30 s function limit
+  "openai/gpt-oss-20b",
   "deepseek-ai/deepseek-v4.1-flash",
   "z-ai/glm-5.3-flash",
+  "nvidia/nemotron-3.5-lightning-30b-a3b",
   "nvidia/nemotron-3-super-120b-a12b",
 ];
 export const NVIDIA_DEFAULT_MODEL = NVIDIA_DEFAULT_MODELS.join(",");
@@ -31,7 +32,7 @@ type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 /**
  * "fast" asks the model to skip its slow thinking phase (reasoning_effort for gpt-oss, the chat-template
  * switch for DeepSeek/GLM/Nemotron); "plain" is the bare OpenAI-compatible request, used if a model
- * rejects those options. The prompt itself carries the JSON schema; the server validates the answer.
+ * rejects those options.
  */
 export type RequestVariant = "fast" | "plain";
 
@@ -42,7 +43,7 @@ export function buildNvidiaRequest(facts: Facts, model: string, variant: Request
     temperature: 0.2,
     top_p: 0.9,
     max_tokens: 3000,
-    stream: false,
+    stream: true,
     messages: [
       { role: "system", content: prompt.system_prompt },
       { role: "user", content: prompt.user_template.replace("{facts_json}", JSON.stringify(facts)) + schemaHint },
@@ -55,74 +56,167 @@ export function buildNvidiaRequest(facts: Facts, model: string, variant: Request
   };
 }
 
-export async function interpretWithNvidia(
-  facts: Facts,
-  options: { apiKey: string; model: string; timeoutMs: number; perModelMs?: number; fetchImpl?: FetchLike; baseUrl?: string },
-): Promise<ProviderResult> {
+export interface NvidiaOptions {
+  apiKey: string;
+  model: string;
+  timeoutMs: number;
+  perModelMs?: number;
+  parallel?: boolean;
+  fetchImpl?: FetchLike;
+  baseUrl?: string;
+}
+
+interface Progress {
+  firstByteMs: number | null;
+  chars: number;
+}
+
+type Completion = { model?: string; text: string; finishReason: string | null };
+
+const shortName = (model: string) => model.split("/").pop() ?? model;
+const isAbort = (error: unknown) => error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+
+/** Read an OpenAI-style answer: a server-sent event stream, or a plain JSON body. */
+async function readCompletion(response: Response, progress: Progress, started: number): Promise<Completion> {
+  const type = response.headers.get("content-type") ?? "";
+  if (!type.includes("text/event-stream") || !response.body) {
+    const data = (await response.json()) as { model?: string; choices?: { finish_reason?: string | null; message?: { content?: string | null } }[] };
+    const choice = data.choices?.[0];
+    const text = choice?.message?.content ?? "";
+    progress.firstByteMs ??= Date.now() - started;
+    progress.chars = text.length;
+    return { model: data.model, text, finishReason: choice?.finish_reason ?? null };
+  }
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  let text = "";
+  let model: string | undefined;
+  let finishReason: string | null = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    progress.firstByteMs ??= Date.now() - started;
+    buffer += value;
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const payload = line.startsWith("data:") ? line.slice(5).trim() : "";
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const chunk = JSON.parse(payload) as {
+          model?: string;
+          choices?: { finish_reason?: string | null; delta?: { content?: string | null; reasoning_content?: string | null } }[];
+        };
+        model ??= chunk.model;
+        const choice = chunk.choices?.[0];
+        const piece = choice?.delta?.content ?? "";
+        text += piece;
+        progress.chars += piece.length + (choice?.delta?.reasoning_content?.length ?? 0);
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+      } catch {
+        // ignore keep-alive or partial lines
+      }
+    }
+  }
+  return { model, text, finishReason };
+}
+
+export async function interpretWithNvidia(facts: Facts, options: NvidiaOptions): Promise<ProviderResult> {
   const doFetch: FetchLike = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const url = `${options.baseUrl ?? NVIDIA_BASE_URL}/chat/completions`;
-  const deadline = AbortSignal.timeout(options.timeoutMs);          // whole call (Netlify stops functions at ~30 s)
+  const deadline = AbortSignal.timeout(options.timeoutMs);
   const perModelMs = options.perModelMs ?? options.timeoutMs;
   const models = options.model.split(",").map((m) => m.trim()).filter(Boolean);
   if (models.length === 0) throw new ProviderError("not_configured", "No LLM model is configured.");
 
-  /** One model: returns the interpretation, or throws a ProviderError (retryable = try the next model). */
-  const attempt = async (model: string): Promise<ProviderResult> => {
-    const signal = AbortSignal.any([deadline, AbortSignal.timeout(perModelMs)]);
+  /** One model; throws a ProviderError whose message names the model and what happened. */
+  const attempt = async (model: string, cancel: AbortSignal): Promise<ProviderResult> => {
+    const signal = AbortSignal.any([deadline, cancel, AbortSignal.timeout(perModelMs)]);
+    const started = Date.now();
+    const progress: Progress = { firstByteMs: null, chars: 0 };
+    const secs = () => ((Date.now() - started) / 1000).toFixed(1);
+    const timedOut = () => {
+      const what = progress.firstByteMs === null
+        ? "no reply"
+        : `still writing (first output at ${(progress.firstByteMs / 1000).toFixed(1)} s, ${progress.chars} characters)`;
+      return new ProviderError("timeout", `${shortName(model)}: ${what} after ${secs()} s`);
+    };
     const send = async (variant: RequestVariant) => {
       try {
         return await doFetch(url, {
           method: "POST",
-          headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json", accept: "application/json" },
+          headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json", accept: "text/event-stream, application/json" },
           body: JSON.stringify(buildNvidiaRequest(facts, model, variant)),
           signal,
         });
       } catch (error) {
-        if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-          throw new ProviderError("timeout", `The LLM (${model}) did not answer in time.`);
-        }
-        throw new ProviderError("unavailable", "The LLM API could not be reached.");
+        if (isAbort(error)) throw timedOut();
+        throw new ProviderError("unavailable", `${shortName(model)}: API could not be reached`);
       }
     };
+
     let response = await send("fast");
     if (response.status === 400 || response.status === 422) response = await send("plain");   // model rejects the speed options
     if (response.status === 401 || response.status === 403) throw new ProviderError("auth", "The LLM API key was rejected.");
-    if (response.status === 429) throw new ProviderError("rate_limited", "The LLM API is rate-limiting requests.");
-    if (response.status === 404 || response.status === 410) throw new ProviderError("unavailable", `Model ${model} is no longer available.`);
-    if (!response.ok) throw new ProviderError("unavailable", `The LLM API returned an error (HTTP ${response.status}).`);
+    if (response.status === 429) throw new ProviderError("rate_limited", `${shortName(model)}: rate limited (HTTP 429)`);
+    if (response.status === 404 || response.status === 410) throw new ProviderError("unavailable", `${shortName(model)}: model retired (HTTP ${response.status})`);
+    if (!response.ok) throw new ProviderError("unavailable", `${shortName(model)}: HTTP ${response.status}`);
 
-    let data: { model?: string; choices?: { finish_reason?: string | null; message?: { content?: string | null } }[] };
+    let completion: Completion;
     try {
-      data = await response.json();
+      completion = await readCompletion(response, progress, started);
     } catch (error) {
-      if (signal.aborted) throw new ProviderError("timeout", `The LLM (${model}) did not answer in time.`);
-      throw new ProviderError("bad_output", "The model's answer was not in the expected format.");
+      if (isAbort(error) || signal.aborted) throw timedOut();
+      throw new ProviderError("bad_output", `${shortName(model)}: unreadable answer`);
     }
-    const choice = data.choices?.[0];
-    if (choice?.finish_reason === "length") throw new ProviderError("truncated", "The model's answer was cut off.");
-    const text = choice?.message?.content;
-    const interpretation = text ? parseInterpretation(text) : null;
-    if (!interpretation) throw new ProviderError("bad_output", "The model's answer was not in the expected format.");
-    return { interpretation, model: data.model ?? model };
+    if (completion.finishReason === "length") throw new ProviderError("truncated", `${shortName(model)}: answer cut off`);
+    const interpretation = completion.text ? parseInterpretation(completion.text) : null;
+    if (!interpretation) throw new ProviderError("bad_output", `${shortName(model)}: answer not in the expected JSON format`);
+    return { interpretation, model: completion.model ?? model };
   };
 
-  // Try the models in order. A slow, retired, failing or malformed model moves on to the next one;
-  // a rejected key or a rate limit applies to every model, so it stops at once.
-  let lastError: ProviderError = new ProviderError("unavailable", "The LLM request failed.");
-  const tried: string[] = [];                                       // per-model outcome, shown in the message
-  for (const model of models) {
-    if (deadline.aborted) break;
-    const started = Date.now();
+  const summarise = (errors: ProviderError[]): ProviderError => {
+    if (errors.some((e) => e.code === "auth")) return new ProviderError("auth", "The LLM API key was rejected.");
+    const detail = errors.map((e) => e.message).join("; ");
+    const code = errors.every((e) => e.code === "timeout") || deadline.aborted ? "timeout"
+      : errors.every((e) => e.code === "rate_limited") ? "rate_limited"
+      : (errors.at(-1)?.code ?? "unavailable");
+    const lead = code === "timeout" ? "The LLM did not answer in time" : code === "rate_limited" ? "The LLM API is rate-limiting requests" : "The LLM request failed";
+    return new ProviderError(code, `${lead} (${detail}).`);
+  };
+  const asProviderError = (error: unknown) =>
+    error instanceof ProviderError ? error : new ProviderError("unavailable", "The LLM request failed.");
+
+  if (options.parallel && models.length > 1) {
+    // Ask every model at once; the first valid answer wins and the rest are cancelled.
+    const controller = new AbortController();
+    const errors: ProviderError[] = [];
     try {
-      return await attempt(model);
-    } catch (error) {
-      if (!(error instanceof ProviderError)) throw error;
-      if (error.code === "auth" || error.code === "rate_limited") throw error;
-      tried.push(`${model.split("/").pop()}: ${error.code} after ${((Date.now() - started) / 1000).toFixed(1)} s`);
-      lastError = error;
+      const result = await Promise.any(models.map((model) =>
+        attempt(model, controller.signal).catch((error: unknown) => {
+          errors.push(asProviderError(error));
+          throw error;
+        })));
+      controller.abort();
+      return result;
+    } catch {
+      throw summarise(errors);
     }
   }
-  const detail = tried.length ? ` (${tried.join("; ")})` : "";
-  if (deadline.aborted || lastError.code === "timeout") throw new ProviderError("timeout", `The LLM did not answer in time${detail}.`);
-  throw new ProviderError(lastError.code, `${lastError.message.replace(/\.$/, "")}${detail}.`);
+
+  // Sequential: a rejected key stops at once; anything else moves on to the next model.
+  const errors: ProviderError[] = [];
+  const never = new AbortController().signal;
+  for (const model of models) {
+    if (deadline.aborted) break;
+    try {
+      return await attempt(model, never);
+    } catch (error) {
+      const failure = asProviderError(error);
+      if (failure.code === "auth") throw new ProviderError("auth", "The LLM API key was rejected.");
+      if (failure.code === "rate_limited") throw new ProviderError("rate_limited", "The LLM API is rate-limiting requests.");
+      errors.push(failure);
+    }
+  }
+  throw summarise(errors.length ? errors : [new ProviderError("timeout", "no model was tried")]);
 }

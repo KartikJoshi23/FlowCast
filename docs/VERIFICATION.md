@@ -85,5 +85,5 @@ LLM function details:
 **A live LLM call.** No `NVIDIA_API_KEY` or `ANTHROPIC_API_KEY` exists on this machine, so both request paths are covered by mocked tests, not real calls.
 
 After deploying with the key:
-- open *AI Interpretation* and confirm the source badge reads "LLM · openai/gpt-oss-20b" (or the model you set);
+- open *AI Interpretation* and confirm the source badge reads "LLM · <model name>" (or the model you set);
 - confirm the grounding badge reads "All N figures verified".

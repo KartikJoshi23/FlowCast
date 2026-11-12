@@ -10,12 +10,15 @@ const ok = (content: string, finish = "stop") => reply(200, { model: "meta/llama
 const opts = (fetchImpl: unknown) => ({ apiKey: "nvapi-test", model: "meta/llama-3.3-70b-instruct", timeoutMs: 5000, fetchImpl: fetchImpl as (input: string, init: RequestInit) => Promise<Response> });
 
 describe("NVIDIA provider", () => {
-  it("builds an OpenAI-compatible request with the notebook prompt and guided JSON", () => {
-    const req = buildNvidiaRequest(sample.facts, "m", true);
+  it("builds an OpenAI-compatible request with the notebook prompt and the speed options", () => {
+    const req = buildNvidiaRequest(sample.facts, "deepseek-ai/x", "fast");
     expect(req.messages[0].role).toBe("system");
     expect(req.messages[1].content).toContain(JSON.stringify(sample.facts));
-    expect(req.nvext?.guided_json).toBeDefined();
-    expect("nvext" in buildNvidiaRequest(sample.facts, "m", false)).toBe(false);
+    expect(req.messages[1].content).toContain("JSON schema");
+    expect(req).toMatchObject({ chat_template_kwargs: { thinking: false } });
+    expect(buildNvidiaRequest(sample.facts, "openai/gpt-oss-20b", "fast")).toMatchObject({ reasoning_effort: "low" });
+    const plain = buildNvidiaRequest(sample.facts, "deepseek-ai/x", "plain");
+    expect("chat_template_kwargs" in plain || "reasoning_effort" in plain).toBe(false);
   });
 
   it("returns a parsed interpretation and sends the key only in the header", async () => {
@@ -28,13 +31,13 @@ describe("NVIDIA provider", () => {
     expect(String(init.body)).not.toContain("nvapi-test");
   });
 
-  it("retries without guided JSON when the model rejects it", async () => {
+  it("retries without the speed options when the model rejects them", async () => {
     const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(reply(400, { detail: "guided_json unsupported" }))
+      .mockResolvedValueOnce(reply(400, { detail: "unsupported option" }))
       .mockResolvedValueOnce(ok(JSON.stringify(sample.rule_based)));
     await interpretWithNvidia(sample.facts, opts(fetchImpl));
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(String((fetchImpl.mock.calls[1][1] as RequestInit).body)).not.toContain("guided_json");
+    expect(String((fetchImpl.mock.calls[1][1] as RequestInit).body)).not.toContain("chat_template_kwargs");
   });
 
   it("moves to the next model when one is retired (HTTP 410)", async () => {
@@ -55,6 +58,12 @@ describe("NVIDIA provider", () => {
     const result = await interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "slow/model,fast/model", timeoutMs: 2000, perModelMs: 50 });
     expect(result.model).toBe("meta/llama-3.3-70b-instruct");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("names each model's outcome and time when all fail", async () => {
+    const fetchImpl = vi.fn(async () => reply(500, {}));
+    await expect(interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "a/one,b/two" }))
+      .rejects.toThrow(/one: unavailable after \d+\.\d s; two: unavailable after/);
   });
 
   it("stops at once on a rejected key", async () => {

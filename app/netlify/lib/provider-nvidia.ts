@@ -2,8 +2,8 @@
  * NVIDIA API Catalog (build.nvidia.com) provider: free API key, OpenAI-compatible endpoint.
  *
  * - Same prompt and JSON schema as the Claude provider (from the notebook's `prompt` cell).
- * - Asks the endpoint for schema-guided JSON (`nvext.guided_json`); if a model rejects that
- *   option, the request is retried once without it and the prompt alone asks for JSON.
+ * - Asks the model to skip its slow thinking phase; if a model rejects that option the request is
+ *   retried once without it. The prompt carries the JSON schema and the server validates the answer.
  * - Models are tried in order: a retired (HTTP 404/410), failing, malformed or slow model (per-model time
  *   limit) moves on to the next one, all within one overall deadline below Netlify's function limit.
  * - Every failure becomes a ProviderError, so the dashboard falls back to the rule-based text.
@@ -28,19 +28,30 @@ export const NVIDIA_DEFAULT_MODEL = NVIDIA_DEFAULT_MODELS.join(",");
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
-export function buildNvidiaRequest(facts: Facts, model: string, guided: boolean) {
+/**
+ * "fast" asks the model to skip its slow thinking phase (reasoning_effort for gpt-oss, the chat-template
+ * switch for DeepSeek/GLM/Nemotron); "plain" is the bare OpenAI-compatible request, used if a model
+ * rejects those options. The prompt itself carries the JSON schema; the server validates the answer.
+ */
+export type RequestVariant = "fast" | "plain";
+
+export function buildNvidiaRequest(facts: Facts, model: string, variant: RequestVariant) {
   const schemaHint = `\n\nReturn only a JSON object (no prose, no code fence) matching this JSON schema:\n${JSON.stringify(prompt.output_schema)}`;
   return {
     model,
     temperature: 0.2,
     top_p: 0.9,
-    max_tokens: 4096,
+    max_tokens: 3000,
     stream: false,
     messages: [
       { role: "system", content: prompt.system_prompt },
       { role: "user", content: prompt.user_template.replace("{facts_json}", JSON.stringify(facts)) + schemaHint },
     ],
-    ...(guided ? { nvext: { guided_json: prompt.output_schema } } : {}),
+    ...(variant === "fast"
+      ? model.startsWith("openai/gpt-oss")
+        ? { reasoning_effort: "low" }
+        : { chat_template_kwargs: { thinking: false, enable_thinking: false } }
+      : {}),
   };
 }
 
@@ -58,12 +69,12 @@ export async function interpretWithNvidia(
   /** One model: returns the interpretation, or throws a ProviderError (retryable = try the next model). */
   const attempt = async (model: string): Promise<ProviderResult> => {
     const signal = AbortSignal.any([deadline, AbortSignal.timeout(perModelMs)]);
-    const send = async (guided: boolean) => {
+    const send = async (variant: RequestVariant) => {
       try {
         return await doFetch(url, {
           method: "POST",
           headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify(buildNvidiaRequest(facts, model, guided)),
+          body: JSON.stringify(buildNvidiaRequest(facts, model, variant)),
           signal,
         });
       } catch (error) {
@@ -73,8 +84,8 @@ export async function interpretWithNvidia(
         throw new ProviderError("unavailable", "The LLM API could not be reached.");
       }
     };
-    let response = await send(true);
-    if (response.status === 400 || response.status === 422) response = await send(false);    // model without guided JSON
+    let response = await send("fast");
+    if (response.status === 400 || response.status === 422) response = await send("plain");   // model rejects the speed options
     if (response.status === 401 || response.status === 403) throw new ProviderError("auth", "The LLM API key was rejected.");
     if (response.status === 429) throw new ProviderError("rate_limited", "The LLM API is rate-limiting requests.");
     if (response.status === 404 || response.status === 410) throw new ProviderError("unavailable", `Model ${model} is no longer available.`);
@@ -98,16 +109,20 @@ export async function interpretWithNvidia(
   // Try the models in order. A slow, retired, failing or malformed model moves on to the next one;
   // a rejected key or a rate limit applies to every model, so it stops at once.
   let lastError: ProviderError = new ProviderError("unavailable", "The LLM request failed.");
+  const tried: string[] = [];                                       // per-model outcome, shown in the message
   for (const model of models) {
     if (deadline.aborted) break;
+    const started = Date.now();
     try {
       return await attempt(model);
     } catch (error) {
       if (!(error instanceof ProviderError)) throw error;
       if (error.code === "auth" || error.code === "rate_limited") throw error;
+      tried.push(`${model.split("/").pop()}: ${error.code} after ${((Date.now() - started) / 1000).toFixed(1)} s`);
       lastError = error;
     }
   }
-  if (deadline.aborted) throw new ProviderError("timeout", "The LLM did not answer in time.");
-  throw lastError;
+  const detail = tried.length ? ` (${tried.join("; ")})` : "";
+  if (deadline.aborted || lastError.code === "timeout") throw new ProviderError("timeout", `The LLM did not answer in time${detail}.`);
+  throw new ProviderError(lastError.code, `${lastError.message.replace(/\.$/, "")}${detail}.`);
 }

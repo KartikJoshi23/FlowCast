@@ -41,7 +41,7 @@ The same comparison also runs live in every visitor's browser (the *Engine verif
 
 ## 4. Dashboard unit tests (`npm test`)
 
-**124 passed** across 12 files:
+**129 passed** across 12 files:
 
 | Area | What is tested |
 |---|---|

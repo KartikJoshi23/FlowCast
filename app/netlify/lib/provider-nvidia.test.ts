@@ -83,6 +83,34 @@ describe("NVIDIA provider", () => {
     expect(cancelled).toBe(true);
   });
 
+  it("parallel mode prefers a fully grounded answer over a faster flawed one", async () => {
+    const flawed = structuredClone(sample.rule_based) as { caveats: string[] };
+    flawed.caveats = ["flawed"];
+    const fetchImpl = vi.fn(async (_u: string, init: RequestInit) => {
+      if (String(init.body).includes("fast/flawed")) return ok(JSON.stringify(flawed));
+      await new Promise((r) => setTimeout(r, 30));
+      return ok(JSON.stringify(sample.rule_based));
+    });
+    const result = await interpretWithNvidia(sample.facts, {
+      ...opts(fetchImpl), model: "fast/flawed,slow/good", parallel: true, graceMs: 2000,
+      score: (i) => (i.caveats[0] === "flawed" ? 1 : 0),
+    });
+    expect(result.interpretation).toEqual(sample.rule_based);
+  });
+
+  it("parallel mode settles for the best flawed answer after the grace period", async () => {
+    const flawed = structuredClone(sample.rule_based) as { caveats: string[] };
+    flawed.caveats = ["flawed"];
+    const fetchImpl = vi.fn((_u: string, init: RequestInit) => String(init.body).includes("fast/flawed")
+      ? Promise.resolve(ok(JSON.stringify(flawed)))
+      : new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("x"), { name: "AbortError" })))));
+    const result = await interpretWithNvidia(sample.facts, {
+      ...opts(fetchImpl), model: "fast/flawed,hung/model", parallel: true, graceMs: 20,
+      score: (i) => (i.caveats[0] === "flawed" ? 1 : 0),
+    });
+    expect(result.interpretation.caveats).toEqual(["flawed"]);
+  });
+
   it("parallel mode reports every model's outcome when all fail", async () => {
     const fetchImpl = vi.fn(async (_u: string, init: RequestInit) =>
       String(init.body).includes("gone/model") ? reply(410, {}) : ok("not json"));

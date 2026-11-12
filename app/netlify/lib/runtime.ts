@@ -10,6 +10,7 @@
  * LLM_PER_MINUTE (6).
  */
 import { getStore } from "@netlify/blobs";
+import { groundingCheck } from "./grounding";
 import type { HandlerDeps, JobRunner } from "./handler";
 import prompt from "./interpretation-prompt.json";
 import { createLimits, memoryStore, sha256Hex, type KeyValueStore } from "./limits";
@@ -88,7 +89,11 @@ export async function buildDeps(mode: "request" | "background", requestUrl: stri
     now: () => new Date(),
     jobs,
     callModel: (facts) => provider === "nvidia"
-      ? interpretWithNvidia(facts, { apiKey: apiKey ?? "", model, timeoutMs, perModelMs, parallel: mode === "background" })
+      ? interpretWithNvidia(facts, { apiKey: apiKey ?? "", model, timeoutMs, perModelMs, parallel: mode === "background",
+          score: (interpretation) => {
+            const g = groundingCheck(interpretation, facts);
+            return g.unverified_numbers.length + g.invalid_evidence_keys.length;
+          } })
       : interpretWithClaude(facts, { apiKey: apiKey ?? "", model, timeoutMs }),
   };
 }

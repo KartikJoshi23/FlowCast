@@ -136,7 +136,7 @@ cd app && npm run build
 | Command | What it checks |
 |---|---|
 | `pytest tests/python` | 31 tests: metrics, leakage, notebook parity, grounding |
-| `npm test` | 124 tests: UI logic, charts, LLM function, validation, grounding parity with Python |
+| `npm test` | 129 tests: UI logic, charts, LLM function, validation, grounding parity with Python |
 | `npm run parity` | The engine on WebAssembly vs the notebook (default scenario + 18 replay steps) |
 | `npm run build` | Typecheck + production build |
 

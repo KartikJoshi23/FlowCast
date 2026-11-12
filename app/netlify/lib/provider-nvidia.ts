@@ -6,7 +6,8 @@
  *   retried once without it. The prompt carries the JSON schema and the server validates the answer.
  * - The answer is streamed, so a failure can say whether the model sent nothing or was just slow.
  * - Free endpoints queue unpredictably, so in "parallel" mode (the background function) all models
- *   are asked at once and the first valid answer wins; the others are cancelled. In sequential mode
+ *   are asked at once; the first fully grounded answer wins (or, after a grace period, the answer with
+ *   the fewest grounding problems) and the others are cancelled. In sequential mode
  *   (short request function) the models are tried in order within the deadline.
  * - Retired models (HTTP 404/410) are skipped. Every failure becomes a ProviderError, so the
  *   dashboard falls back to the rule-based text.
@@ -62,6 +63,10 @@ export interface NvidiaOptions {
   timeoutMs: number;
   perModelMs?: number;
   parallel?: boolean;
+  /** Parallel mode: problems in an answer (0 = fully grounded). A flawed first answer waits for a better one. */
+  score?: (interpretation: ProviderResult["interpretation"]) => number;
+  /** How long to keep waiting for a better answer after the first flawed one (default 45 s). */
+  graceMs?: number;
   fetchImpl?: FetchLike;
   baseUrl?: string;
 }
@@ -188,20 +193,38 @@ export async function interpretWithNvidia(facts: Facts, options: NvidiaOptions):
     error instanceof ProviderError ? error : new ProviderError("unavailable", "The LLM request failed.");
 
   if (options.parallel && models.length > 1) {
-    // Ask every model at once; the first valid answer wins and the rest are cancelled.
+    // Ask every model at once. The first fully grounded answer wins; if the first answer has
+    // problems, keep waiting (graceMs) for a better one, then take the answer with the fewest.
     const controller = new AbortController();
     const errors: ProviderError[] = [];
-    try {
-      const result = await Promise.any(models.map((model) =>
-        attempt(model, controller.signal).catch((error: unknown) => {
-          errors.push(asProviderError(error));
-          throw error;
-        })));
-      controller.abort();
-      return result;
-    } catch {
-      throw summarise(errors);
-    }
+    let best: { result: ProviderResult; score: number } | null = null;
+    await new Promise<void>((resolve) => {
+      let open = models.length;
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        clearTimeout(grace);
+        resolve();
+      };
+      for (const model of models) {
+        attempt(model, controller.signal)
+          .then((result) => {
+            const score = options.score ? options.score(result.interpretation) : 0;
+            if (!best || score < best.score) best = { result, score };
+            if (score === 0) finish();
+            else grace ??= setTimeout(finish, options.graceMs ?? 45_000);
+          }, (error: unknown) => {
+            errors.push(asProviderError(error));
+          })
+          .finally(() => {
+            open -= 1;
+            if (open === 0) finish();
+          });
+      }
+    });
+    controller.abort();
+    const winner = best as { result: ProviderResult; score: number } | null;
+    if (winner) return winner.result;
+    throw summarise(errors);
   }
 
   // Sequential: a rejected key stops at once; anything else moves on to the next model.

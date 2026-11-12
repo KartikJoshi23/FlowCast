@@ -80,9 +80,21 @@ LLM function details:
 | LLM endpoint without a key | `GET` reports `configured: false` (never the key); the page shows the labelled rule-based interpretation; no failed requests in the console |
 | Endpoint hardening | Foreign origin → 403; injected text in the facts → 422 "unexpected text value" |
 
-## 6. Not verifiable here
+## 6. Live LLM on the deployed site (https://flowcastai.netlify.app)
 
-**A live LLM call.** No `NVIDIA_API_KEY` or `ANTHROPIC_API_KEY` exists on this machine, so both request paths are covered by mocked tests, not real calls.
+With a free `NVIDIA_API_KEY` set in Netlify:
+
+| Check | Result |
+|---|---|
+| `GET /api/interpret` | `configured: true`, provider `nvidia`; the key is never returned |
+| Request flow | `POST` answers **202** with a job id in about 1–2 s; the background function asks five NVIDIA models in parallel; the page polls until the result is stored |
+| 29-month scenario | Answer from `nvidia/nemotron-3.5-lightning-30b-a3b` in about 22 s; **grounding passed: 42 figures checked, none unverified, no invalid evidence keys** |
+| Grounding check catches a weak answer | An earlier first-year answer quoted "1500", which is not in the facts, and some invalid evidence keys. The check flagged them, and the server now prefers an answer that passes the check (waiting up to 45 s for one) |
+| Why a background function | Free NVIDIA endpoints took more than 25 s, which a synchronous function cannot wait for. A background function can run for up to 15 minutes |
+
+## 7. Not verifiable here
+
+**A live Claude call.** No `ANTHROPIC_API_KEY` is configured, so the Claude path is covered by mocked tests only. The NVIDIA path was tested live (section 6).
 
 After deploying with the key:
 - open *AI Interpretation* and confirm the source badge reads "LLM · <model name>" (or the model you set);

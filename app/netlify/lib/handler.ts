@@ -81,7 +81,7 @@ const jobKey = (job: string) => `jobs/${job}`;
 const jobToken = (secret: string, job: string) => sha256Hex(`flowcast-job\n${secret}\n${job}`);
 
 /** Bump to invalidate every cached interpretation (e.g. after changing how answers are chosen). */
-const CACHE_VERSION = "2";
+const CACHE_VERSION = "3";
 const cacheKeyFor =(deps: HandlerDeps, facts: Facts) =>
   sha256Hex(`${CACHE_VERSION}\n${deps.provider}\n${deps.model}\n${deps.promptVersion}\n${JSON.stringify(facts)}`);
 

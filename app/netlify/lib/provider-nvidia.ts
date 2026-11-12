@@ -37,8 +37,26 @@ type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
  */
 export type RequestVariant = "fast" | "plain";
 
+/** Every leaf path in FACTS as a dotted key (list positions as numbers), as the grounding check reads them. */
+export function factPaths(facts: unknown): string[] {
+  const out: string[] = [];
+  const walk = (node: unknown, path: string) => {
+    if (node && typeof node === "object") {
+      const entries: [string, unknown][] = Array.isArray(node) ? node.map((v, i) => [String(i), v]) : Object.entries(node);
+      if (entries.length === 0 && path) out.push(path);
+      for (const [key, value] of entries) walk(value, path ? `${path}.${key}` : key);
+    } else if (path) {
+      out.push(path);
+    }
+  };
+  walk(facts, "");
+  return out;
+}
+
 export function buildNvidiaRequest(facts: Facts, model: string, variant: RequestVariant) {
-  const schemaHint = `\n\nReturn only a JSON object (no prose, no code fence) matching this JSON schema:\n${JSON.stringify(prompt.output_schema)}`;
+  // Open models tend to guess evidence paths, so they get the exact list the grounding check accepts.
+  const schemaHint = `\n\nReturn only a JSON object (no prose, no code fence) matching this JSON schema:\n${JSON.stringify(prompt.output_schema)}` +
+    `\n\nValid evidence keys (copy them exactly; cite only keys from this list):\n${factPaths(facts).join(", ")}`;
   return {
     model,
     temperature: 0.2,

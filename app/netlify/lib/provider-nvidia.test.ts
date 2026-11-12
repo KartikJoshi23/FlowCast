@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import fixtures from "./__fixtures__/llm-fixtures.json";
 import type { Facts } from "./facts-validation";
 import { ProviderError } from "./provider-anthropic";
-import { buildNvidiaRequest, interpretWithNvidia } from "./provider-nvidia";
+import { buildNvidiaRequest, factPaths, interpretWithNvidia } from "./provider-nvidia";
+import { pathExists } from "./grounding";
 
 const sample = (fixtures as unknown as { facts_samples: { facts: Facts; rule_based: unknown }[] }).facts_samples[0];
 const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
@@ -15,10 +16,18 @@ describe("NVIDIA provider", () => {
     expect(req.messages[0].role).toBe("system");
     expect(req.messages[1].content).toContain(JSON.stringify(sample.facts));
     expect(req.messages[1].content).toContain("JSON schema");
+    expect(req.messages[1].content).toContain("Valid evidence keys");
     expect(req).toMatchObject({ chat_template_kwargs: { thinking: false } });
     expect(buildNvidiaRequest(sample.facts, "openai/gpt-oss-20b", "fast")).toMatchObject({ reasoning_effort: "low" });
     const plain = buildNvidiaRequest(sample.facts, "deepseek-ai/x", "plain");
     expect("chat_template_kwargs" in plain || "reasoning_effort" in plain).toBe(false);
+  });
+
+  it("lists every fact path, and the grounding check accepts each one", () => {
+    const paths = factPaths(sample.facts);
+    expect(paths.length).toBeGreaterThan(100);
+    expect(paths.every((p) => pathExists(sample.facts, p))).toBe(true);
+    expect(factPaths({ a: [{ b: 1 }, 2], c: {} })).toEqual(["a.0.b", "a.1", "c"]);
   });
 
   it("returns a parsed interpretation and sends the key only in the header", async () => {

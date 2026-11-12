@@ -20,10 +20,10 @@ import { ProviderError, type ProviderResult } from "./provider-anthropic";
 export const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 /** Default models (LLM_MODEL may override with one model or a comma-separated list). */
 export const NVIDIA_DEFAULT_MODELS = [
+  "nvidia/nemotron-3.5-lightning-30b-a3b",   // answered first in every live test; first in sequential mode
   "openai/gpt-oss-20b",
   "deepseek-ai/deepseek-v4.1-flash",
   "z-ai/glm-5.3-flash",
-  "nvidia/nemotron-3.5-lightning-30b-a3b",
   "nvidia/nemotron-3-super-120b-a12b",
 ];
 export const NVIDIA_DEFAULT_MODEL = NVIDIA_DEFAULT_MODELS.join(",");
@@ -117,11 +117,12 @@ async function readCompletion(response: Response, progress: Progress, started: n
   let finishReason: string | null = null;
   for (;;) {
     const { value, done } = await reader.read();
-    if (done) break;
-    progress.firstByteMs ??= Date.now() - started;
-    buffer += value;
+    if (!done) {
+      progress.firstByteMs ??= Date.now() - started;
+      buffer += value;
+    }
     const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+    buffer = done ? "" : (lines.pop() ?? "");          // at the end, also read a last line without "\n"
     for (const line of lines) {
       const payload = line.startsWith("data:") ? line.slice(5).trim() : "";
       if (!payload || payload === "[DONE]") continue;
@@ -140,6 +141,7 @@ async function readCompletion(response: Response, progress: Progress, started: n
         // ignore keep-alive or partial lines
       }
     }
+    if (done) break;
   }
   return { model, text, finishReason };
 }
@@ -179,7 +181,10 @@ export async function interpretWithNvidia(facts: Facts, options: NvidiaOptions):
     };
 
     let response = await send("fast");
-    if (response.status === 400 || response.status === 422) response = await send("plain");   // model rejects the speed options
+    if (response.status === 400 || response.status === 422) {                                  // model rejects the speed options
+      await response.body?.cancel().catch(() => undefined);                                     // release the unused connection
+      response = await send("plain");
+    }
     if (response.status === 401 || response.status === 403) throw new ProviderError("auth", "The LLM API key was rejected.");
     if (response.status === 429) throw new ProviderError("rate_limited", `${shortName(model)}: rate limited (HTTP 429)`);
     if (response.status === 404 || response.status === 410) throw new ProviderError("unavailable", `${shortName(model)}: model retired (HTTP ${response.status})`);

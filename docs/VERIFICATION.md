@@ -41,7 +41,7 @@ The same comparison also runs live in every visitor's browser (the *Engine verif
 
 ## 4. Dashboard unit tests (`npm test`)
 
-**129 passed** across 12 files:
+**135 passed** across 12 files:
 
 | Area | What is tested |
 |---|---|
@@ -90,9 +90,35 @@ With a free `NVIDIA_API_KEY` set in Netlify:
 | Request flow | `POST` answers **202** with a job id in about 1–2 s; the background function asks five NVIDIA models in parallel; the page polls until the result is stored |
 | 29-month scenario | Answer from `nvidia/nemotron-3.5-lightning-30b-a3b` in about 22 s; **grounding passed: 42 figures checked, none unverified, no invalid evidence keys** |
 | Grounding check catches a weak answer | An earlier first-year answer quoted "1500", which is not in the facts, and some invalid evidence keys. The check flagged them, and the server now prefers an answer that passes the check (waiting up to 45 s for one) |
+| First-year scenario (the dashboard's opening view) | Answer in about 20 s; **51 figures checked, all verified, no invalid evidence keys** (after the models were given the list of valid evidence keys) |
+| Real-time loop in the browser | *Close Aug 2023* → a new LLM interpretation for 13 months of data; **all 46 figures verified** |
+| Console on the live site | Clean (the only error was from Netlify's own deploy-toolbar snippet; it is now allowed by its exact hash in the CSP) |
 | Why a background function | Free NVIDIA endpoints took more than 25 s, which a synchronous function cannot wait for. A background function can run for up to 15 minutes |
 
-## 7. Not verifiable here
+## 7. Final audit
+
+Audit of the whole project after deployment. Every fix has a test.
+
+| Area | Finding | Fix |
+|---|---|---|
+| Notebook LLM route | `re` was never imported at module level, so parsing any real NVIDIA answer would have crashed | Imported. A simulated NVIDIA server test ran the real notebook through 5 scenarios: grounded answer wins; grounded beats faster flawed; plain retry after HTTP 400; flawed-only is used and flagged; all-fail lists every model's reason |
+| Notebook LLM route | Models were tried one by one, using slow schema-guided JSON; a timeout on the first model ended the whole call; the model that answered live was missing from the list | Same approach as the dashboard: all five models in parallel (threads), speed options, valid evidence keys in the prompt, first fully grounded answer wins |
+| Regenerate button | It returned the server's cached answer instead of a new one | Sends `fresh: true`; the server skips the cache (still rate-limited and capped) |
+| Background jobs | A finished job stayed marked "pending" for 6 minutes, so a new run for the same facts could not start | A finished run marks its job "done" |
+| LLM status check | One failed check (e.g. during a deploy) kept the page on the rule-based text until a reload | Only definite answers are remembered; failures are re-checked next time |
+| Error messages | A crashed function was reported as "not running here (static preview)" | Reported as "service failed (HTTP n)" |
+| Job token | Plain SHA-256 of secret + job id | HMAC-SHA256 |
+| Streaming reader | A last stream line without a trailing newline was ignored | Read at end of stream |
+| AI Interpretation page | The "data has changed" note ignored a change of market level; no hint about waiting time | Both added ("free models can take up to a minute") |
+| Secrets | Repository, full git history and built site scanned for API keys and personal data | None found |
+
+After the fixes:
+- **Notebook:** 42 code cells run with no errors.
+- **Tests:** pytest 31 passed; dashboard tests 135 passed.
+- **Parity:** WebAssembly parity PASS, with the same maximum deviations as section 3.
+- **Build:** the production build passes.
+
+## 8. Not verifiable here
 
 **A live Claude call.** No `ANTHROPIC_API_KEY` is configured, so the Claude path is covered by mocked tests only. The NVIDIA path was tested live (section 6).
 

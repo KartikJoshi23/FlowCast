@@ -55,7 +55,8 @@ export const useInterpretation = create<InterpretationState>()((set, get) => ({
     set({ status: "loading", hash, lastRequestAt: Date.now() });
     const status = await checkLlmStatus();
     const outcome = status.configured
-      ? await requestInterpretation(analysis.facts, controller.signal)
+      // Regenerate (force) after an LLM answer asks for a new one rather than the cached copy.
+      ? await requestInterpretation(analysis.facts, controller.signal, { fresh: Boolean(options.force) && state.source?.kind === "llm" && hash === state.hash })
       : ({ ok: false, code: "not_configured", message: status.reason } as const);
     if (!outcome.ok && outcome.code === "cancelled") return;
     if (get().hash !== hash) return;                       // newer data arrived meanwhile

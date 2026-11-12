@@ -51,6 +51,20 @@ describe("requestInterpretation", () => {
     vi.useRealTimers();
   });
 
+  it("tells a crashed function apart from a static host", async () => {
+    vi.stubGlobal("fetch", respond(502, "upstream error", "text/plain"));
+    expect(await requestInterpretation({ a: 1 })).toEqual({ ok: false, code: "http_502", message: "The interpretation service failed (HTTP 502)." });
+  });
+
+  it("sends fresh: true only when asked", async () => {
+    const fetchMock = respond(503, { error: "x", message: "y" });
+    vi.stubGlobal("fetch", fetchMock);
+    await requestInterpretation({ a: 1 }, undefined, { fresh: true });
+    await requestInterpretation({ a: 1 });
+    expect(JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual({ facts: { a: 1 }, fresh: true });
+    expect(JSON.parse(String((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body))).toEqual({ facts: { a: 1 } });
+  });
+
   it("reports network failures and cancellations", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
     expect(await requestInterpretation({ a: 1 })).toMatchObject({ ok: false, code: "network" });
@@ -71,6 +85,16 @@ describe("checkLlmStatus", () => {
     const fetchMock = respond(200, { configured: true, provider: "anthropic", model: "claude-opus-5-5" });
     vi.stubGlobal("fetch", fetchMock);
     expect(await checkLlmStatus()).toEqual({ configured: true, model: "claude-opus-5-5" });
+    await checkLlmStatus();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not remember a failed check, so the next interpretation asks again", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
+    expect(await checkLlmStatus()).toMatchObject({ configured: false, reason: expect.stringContaining("could not be reached") });
+    const fetchMock = respond(200, { configured: true, provider: "nvidia", model: "m" });
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await checkLlmStatus()).toEqual({ configured: true, model: "m" });
     await checkLlmStatus();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

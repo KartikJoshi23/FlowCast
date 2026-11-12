@@ -54,6 +54,7 @@ export interface HandlerDeps {
 
 type JobRecord =
   | { state: "pending"; started_at: number }
+  | { state: "done" }
   | { state: "error"; status: number; error: string; message: string };
 
 const json = (status: number, body: unknown, extra: Record<string, string> = {}) =>
@@ -78,11 +79,16 @@ const STATUS_FOR: Record<ProviderErrorCode, number> = {
 
 const JOB_ID = /^[0-9a-f]{64}$/;
 const jobKey = (job: string) => `jobs/${job}`;
-const jobToken = (secret: string, job: string) => sha256Hex(`flowcast-job\n${secret}\n${job}`);
+/** HMAC-SHA256 of the job id, keyed with the server secret: only this endpoint can start a run. */
+async function jobToken(secret: string, job: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(`flowcast-job\n${secret}`), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(job));
+  return Array.from(new Uint8Array(mac), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /** Bump to invalidate every cached interpretation (e.g. after changing how answers are chosen). */
 const CACHE_VERSION = "3";
-const cacheKeyFor =(deps: HandlerDeps, facts: Facts) =>
+const cacheKeyFor = (deps: HandlerDeps, facts: Facts) =>
   sha256Hex(`${CACHE_VERSION}\n${deps.provider}\n${deps.model}\n${deps.promptVersion}\n${JSON.stringify(facts)}`);
 
 async function readJob(store: KeyValueStore, job: string): Promise<JobRecord | null> {
@@ -163,7 +169,10 @@ export async function handleInterpret(request: Request, clientIp: string, deps: 
   }
 
   const key = await cacheKeyFor(deps, facts);
-  const cached = await readCached(deps, key);
+  // "fresh" (the Regenerate button) asks for a new answer instead of the cached one; it still
+  // goes through the rate limit and the daily cap below.
+  const fresh = (body as { fresh?: unknown }).fresh === true;
+  const cached = fresh ? null : await readCached(deps, key);
   if (cached) return json(200, cached);
 
   // The same facts are already being interpreted in the background: just hand back the job id.
@@ -182,6 +191,8 @@ export async function handleInterpret(request: Request, clientIp: string, deps: 
       : "Too many interpretation requests; please wait a moment.";
     return fail(429, admitted.reason, message, { "retry-after": String(admitted.retryAfterSeconds) });
   }
+
+  if (fresh) await deps.limits.putCached(key, "");              // so polling waits for the new answer
 
   if (deps.jobs) {
     await writeJob(deps.jobs.store, key, { state: "pending", started_at: deps.now().getTime() });
@@ -206,6 +217,7 @@ async function jobStatus(job: string, deps: HandlerDeps): Promise<Response> {
   const record = await readJob(deps.jobs.store, job);
   if (!record) return fail(404, "unknown_job", "No such interpretation job.");
   if (record.state === "error") return fail(record.status, record.error, record.message);
+  if (record.state === "done") return fail(503, "unavailable", "The interpretation finished but its result could not be stored.");
   if (deps.now().getTime() - record.started_at > JOB_STALE_MS) {
     return fail(504, "timeout", "The background interpretation did not finish.");
   }
@@ -238,6 +250,7 @@ export async function runInterpretJob(request: Request, deps: HandlerDeps): Prom
   }
   try {
     await produce(deps, checked.facts, key);
+    await writeJob(deps.jobs.store, key, { state: "done" });       // so a later Regenerate starts a new run
     return "done";
   } catch (error) {
     const f = providerFailure(error);

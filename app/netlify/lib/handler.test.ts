@@ -174,6 +174,19 @@ describe("background jobs", () => {
     expect(callModel).not.toHaveBeenCalled();
   });
 
+  it("Regenerate (fresh) bypasses the cached answer and starts a new run", async () => {
+    const { job } = await (await handleInterpret(post({ facts: sample.facts }), "1.2.3.4", deps)).json();
+    await runInterpretJob(runRequest(started[0]), deps);
+    expect((await poll(job)).status).toBe(200);
+    const again = await handleInterpret(post({ facts: sample.facts, fresh: true }), "1.2.3.4", deps);
+    expect(again.status).toBe(202);
+    expect(started).toHaveLength(2);
+    expect((await poll(job)).status).toBe(202);          // waits for the new answer, not the old one
+    await runInterpretJob(runRequest(started[1]), deps);
+    expect((await poll(job)).status).toBe(200);
+    expect(callModel).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects malformed and unknown job ids", async () => {
     expect((await poll("../etc")).status).toBe(400);
     expect((await poll("a".repeat(64))).status).toBe(404);

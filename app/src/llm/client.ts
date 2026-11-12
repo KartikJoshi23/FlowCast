@@ -28,7 +28,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
   });
 
 /** Call the server-side LLM function. Never throws; every failure becomes a reason for the fallback. */
-export async function requestInterpretation(facts: Facts, signal?: AbortSignal): Promise<InterpretOutcome> {
+export async function requestInterpretation(facts: Facts, signal?: AbortSignal, options: { fresh?: boolean } = {}): Promise<InterpretOutcome> {
   const timeout = AbortSignal.timeout(CLIENT_TIMEOUT_MS);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   let response: Response;
@@ -36,7 +36,7 @@ export async function requestInterpretation(facts: Facts, signal?: AbortSignal):
     response = await fetch(INTERPRET_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ facts }),
+      body: JSON.stringify(options.fresh ? { facts, fresh: true } : { facts }),
       signal: combined,
     });
   } catch (error) {
@@ -66,7 +66,11 @@ type Body = InterpretSuccess & { error?: string; message?: string; status?: stri
 async function readOutcome(response: Response): Promise<InterpretOutcome | { pending: string }> {
   const type = response.headers.get("content-type") ?? "";
   if (!type.includes("application/json")) {
-    return { ok: false, code: "unavailable", message: "The interpretation service is not running here (static preview)." };
+    // HTML or 404: a static host without the function. Anything else: the function itself failed.
+    const missing = response.ok || response.status === 404;
+    return missing
+      ? { ok: false, code: "unavailable", message: "The interpretation service is not running here (static preview)." }
+      : { ok: false, code: `http_${response.status}`, message: `The interpretation service failed (HTTP ${response.status}).` };
   }
   const body = (await response.json().catch(() => null)) as Body | null;
   if (response.status === 202 && body?.status === "pending" && typeof body.job === "string") return { pending: body.job };
@@ -81,24 +85,40 @@ export type LlmStatus = { configured: true; model: string } | { configured: fals
 
 let statusPromise: Promise<LlmStatus> | null = null;
 
-/** Ask the function once whether an LLM is configured; a static host (no function) counts as "no". */
+/**
+ * Ask the function whether an LLM is configured; a static host (no function) counts as "no".
+ * A definite answer is remembered for the session; a failed check (network error, a deploy in
+ * progress) is not, so the next interpretation asks again instead of staying rule-based.
+ */
 export function checkLlmStatus(): Promise<LlmStatus> {
-  statusPromise ??= (async (): Promise<LlmStatus> => {
+  if (statusPromise) return statusPromise;
+  const check = async (): Promise<{ status: LlmStatus; definite: boolean }> => {
     try {
       const response = await fetch(INTERPRET_URL, { method: "GET", signal: AbortSignal.timeout(10_000) });
       const type = response.headers.get("content-type") ?? "";
-      if (!response.ok || !type.includes("application/json")) {
-        return { configured: false, reason: "The interpretation service is not running here (static preview)." };
+      if (!type.includes("application/json")) {
+        const missing = response.ok || response.status === 404;     // a static host without the function
+        return missing
+          ? { status: { configured: false, reason: "The interpretation service is not running here (static preview)." }, definite: true }
+          : { status: { configured: false, reason: `The interpretation service failed (HTTP ${response.status}).` }, definite: false };
+      }
+      if (!response.ok) {
+        return { status: { configured: false, reason: `The interpretation service failed (HTTP ${response.status}).` }, definite: false };
       }
       const body = (await response.json()) as { configured?: boolean; model?: string };
       return body.configured
-        ? { configured: true, model: body.model ?? "unknown model" }
-        : { configured: false, reason: "No LLM API key is configured on the server." };
+        ? { status: { configured: true, model: body.model ?? "unknown model" }, definite: true }
+        : { status: { configured: false, reason: "No LLM API key is configured on the server." }, definite: true };
     } catch {
-      return { configured: false, reason: "The interpretation service could not be reached." };
+      return { status: { configured: false, reason: "The interpretation service could not be reached." }, definite: false };
     }
-  })();
-  return statusPromise;
+  };
+  const pending = check().then(({ status, definite }) => {
+    if (!definite) statusPromise = null;                              // ask again next time
+    return status;
+  });
+  statusPromise = pending;
+  return pending;
 }
 
 /** Forget the cached status (used by tests). */

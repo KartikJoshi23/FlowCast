@@ -127,6 +127,12 @@ describe("NVIDIA provider", () => {
       .rejects.toThrow(/model: model retired \(HTTP 410\).*model: answer not in the expected JSON format|model: answer not in the expected JSON format.*model: model retired/);
   });
 
+  it("reads the last streamed line even without a trailing newline", async () => {
+    const chunk = { model: "m", choices: [{ delta: { content: JSON.stringify(sample.rule_based) }, finish_reason: "stop" }] };
+    const fetchImpl = vi.fn(async () => new Response("data: " + JSON.stringify(chunk), { status: 200, headers: { "content-type": "text/event-stream" } }));
+    expect((await interpretWithNvidia(sample.facts, opts(fetchImpl))).interpretation).toEqual(sample.rule_based);
+  });
+
   it("reads a streamed (server-sent events) answer", async () => {
     const text = JSON.stringify(sample.rule_based);
     const chunks = [text.slice(0, 40), text.slice(40)].map((piece) =>

@@ -22,7 +22,7 @@ export function InsightsPage() {
   const facts = analysis.facts;
   const unverified = grounding?.unverified_numbers ?? [];
   const loading = status === "loading";
-  const stale = basis && basis.dataThrough !== analysis.result.meta.data_through;
+  const stale = basis && (basis.dataThrough !== analysis.result.meta.data_through || basis.level !== analysis.result.meta.level_label);
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
@@ -37,7 +37,7 @@ export function InsightsPage() {
         <div className="flex flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
             {loading ? (
-              <span className="flex items-center gap-2 text-[13px] text-accent"><Spinner /> Generating interpretation from the latest facts…</span>
+              <span className="flex items-center gap-2 text-[13px] text-accent"><Spinner /> Generating interpretation from the latest facts… free models can take up to a minute</span>
             ) : (
               <>
                 <SourceBadge source={source} />

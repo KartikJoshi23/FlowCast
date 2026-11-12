@@ -3,9 +3,9 @@
  *
  * The only place the LLM API key exists. It is read from an environment variable (set in Netlify
  * as a secret, scoped to Functions) and never sent to the browser:
- *   NVIDIA_API_KEY     free key from build.nvidia.com (used first if set; default model meta/llama-3.3-70b-instruct)
+ *   NVIDIA_API_KEY     free key from build.nvidia.com (used first if set; default models in provider-nvidia.ts, tried in order)
  *   ANTHROPIC_API_KEY  Claude (default model claude-opus-5-5)
- * Optional: LLM_MODEL (override the model), LLM_DAILY_CAP (default 200), LLM_PER_MINUTE (default 6).
+ * Optional: LLM_MODEL (override the model; for NVIDIA a comma-separated list is allowed), LLM_DAILY_CAP (default 200), LLM_PER_MINUTE (default 6).
  */
 import { getStore } from "@netlify/blobs";
 import type { Config, Context } from "@netlify/functions";

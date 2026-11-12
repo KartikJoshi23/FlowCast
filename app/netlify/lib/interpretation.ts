@@ -27,12 +27,18 @@ export function validateInterpretation(value: unknown): Interpretation | null {
   return value as Interpretation;
 }
 
-/** Parse model text as JSON, tolerating a code fence some models add around it. */
+/**
+ * Parse model text as JSON. Tolerates what open models add around it: a code fence,
+ * a <think>...</think> reasoning block, or a sentence before/after the object.
+ */
 export function parseInterpretation(text: string): Interpretation | null {
-  let body = text.trim();
+  let body = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
   if (body.startsWith("```")) body = body.replace(/^```[a-z]*\s*/i, "").replace(/```\s*$/, "");
+  const first = body.indexOf("{");
+  const last = body.lastIndexOf("}");
+  if (first < 0 || last <= first) return null;
   try {
-    return validateInterpretation(JSON.parse(body));
+    return validateInterpretation(JSON.parse(body.slice(first, last + 1)));
   } catch {
     return null;
   }

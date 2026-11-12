@@ -37,6 +37,26 @@ describe("NVIDIA provider", () => {
     expect(String((fetchImpl.mock.calls[1][1] as RequestInit).body)).not.toContain("guided_json");
   });
 
+  it("moves to the next model when one is retired (HTTP 410)", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(reply(410, { detail: "gone" }))
+      .mockResolvedValueOnce(ok(JSON.stringify(sample.rule_based)));
+    const result = await interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "old/model, new/model" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(String((fetchImpl.mock.calls[1][1] as RequestInit).body)).toContain('"model":"new/model"');
+    expect(result.interpretation).toEqual(sample.rule_based);
+  });
+
+  it("reports when every model is retired", async () => {
+    const fetchImpl = vi.fn(async () => reply(410, {}));
+    await expect(interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "a/b,c/d" })).rejects.toMatchObject({ code: "unavailable" });
+  });
+
+  it("parses JSON wrapped in reasoning text", async () => {
+    const fetchImpl = vi.fn(async () => ok("<think>planning...</think>\nHere it is:\n" + JSON.stringify(sample.rule_based) + "\nDone."));
+    expect((await interpretWithNvidia(sample.facts, opts(fetchImpl))).interpretation).toEqual(sample.rule_based);
+  });
+
   it.each([
     [reply(401, {}), "auth"],
     [reply(429, {}), "rate_limited"],

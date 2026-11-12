@@ -4,6 +4,7 @@
  * - Same prompt and JSON schema as the Claude provider (from the notebook's `prompt` cell).
  * - Asks the endpoint for schema-guided JSON (`nvext.guided_json`); if a model rejects that
  *   option, the request is retried once without it and the prompt alone asks for JSON.
+ * - If a model is retired or unknown (HTTP 404/410), the next model in the list is tried.
  * - Every failure becomes a ProviderError, so the dashboard falls back to the rule-based text.
  */
 import type { Facts } from "./facts-validation";
@@ -12,7 +13,17 @@ import prompt from "./interpretation-prompt.json";
 import { ProviderError, type ProviderResult } from "./provider-anthropic";
 
 export const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-export const NVIDIA_DEFAULT_MODEL = "meta/llama-3.3-70b-instruct";
+/**
+ * Tried in order: NVIDIA retires catalog models (HTTP 404/410), so the next one is used automatically.
+ * LLM_MODEL may override this with one model or a comma-separated list.
+ */
+export const NVIDIA_DEFAULT_MODELS = [
+  "deepseek-ai/deepseek-v4.1-flash",
+  "nvidia/nemotron-3-super-120b-a12b",
+  "z-ai/glm-5.3-flash",
+  "openai/gpt-oss-20b",
+];
+export const NVIDIA_DEFAULT_MODEL = NVIDIA_DEFAULT_MODELS.join(",");
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -40,12 +51,13 @@ export async function interpretWithNvidia(
   const url = `${options.baseUrl ?? NVIDIA_BASE_URL}/chat/completions`;
   const deadline = AbortSignal.timeout(options.timeoutMs);
 
-  const send = async (guided: boolean) => {
+  const models = options.model.split(",").map((m) => m.trim()).filter(Boolean);
+  const send = async (model: string, guided: boolean) => {
     try {
       return await doFetch(url, {
         method: "POST",
         headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify(buildNvidiaRequest(facts, options.model, guided)),
+        body: JSON.stringify(buildNvidiaRequest(facts, model, guided)),
         signal: deadline,
       });
     } catch (error) {
@@ -56,8 +68,18 @@ export async function interpretWithNvidia(
     }
   };
 
-  let response = await send(true);
-  if (response.status === 400 || response.status === 422) response = await send(false);   // model without guided JSON
+  let response: Response | null = null;
+  let usedModel = models[0] ?? "";
+  for (const model of models) {
+    usedModel = model;
+    response = await send(model, true);
+    if (response.status === 400 || response.status === 422) response = await send(model, false);   // model without guided JSON
+    if (response.status !== 404 && response.status !== 410) break;                                 // retired model: try the next
+  }
+  if (!response) throw new ProviderError("not_configured", "No LLM model is configured.");
+  if (response.status === 404 || response.status === 410) {
+    throw new ProviderError("unavailable", `None of the configured NVIDIA models is available any more (${models.join(", ")}).`);
+  }
 
   if (response.status === 401 || response.status === 403) throw new ProviderError("auth", "The LLM API key was rejected.");
   if (response.status === 429) throw new ProviderError("rate_limited", "The LLM API is rate-limiting requests.");
@@ -74,5 +96,5 @@ export async function interpretWithNvidia(
   const text = choice?.message?.content;
   const interpretation = text ? parseInterpretation(text) : null;
   if (!interpretation) throw new ProviderError("bad_output", "The model's answer was not in the expected format.");
-  return { interpretation, model: data.model ?? options.model };
+  return { interpretation, model: data.model ?? usedModel };
 }

@@ -57,8 +57,8 @@ export default async (request: Request, context: Context) => {
     limits,
     now: () => new Date(),
     callModel: (facts) => provider === "nvidia"
-      ? interpretWithNvidia(facts, { apiKey: apiKey ?? "", model, timeoutMs: 40_000 })
-      : interpretWithClaude(facts, { apiKey: apiKey ?? "", model, timeoutMs: 40_000 }),
+      ? interpretWithNvidia(facts, { apiKey: apiKey ?? "", model, timeoutMs: 25_000, perModelMs: 14_000 })
+      : interpretWithClaude(facts, { apiKey: apiKey ?? "", model, timeoutMs: 25_000 }),
   });
 };
 

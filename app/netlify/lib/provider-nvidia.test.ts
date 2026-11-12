@@ -47,6 +47,22 @@ describe("NVIDIA provider", () => {
     expect(result.interpretation).toEqual(sample.rule_based);
   });
 
+  it("moves on when a model is too slow, within the overall deadline", async () => {
+    const slow = (_u: string, init: RequestInit) => new Promise<Response>((_, reject) => {
+      init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })));
+    });
+    const fetchImpl = vi.fn().mockImplementationOnce(slow).mockResolvedValueOnce(ok(JSON.stringify(sample.rule_based)));
+    const result = await interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "slow/model,fast/model", timeoutMs: 2000, perModelMs: 50 });
+    expect(result.model).toBe("meta/llama-3.3-70b-instruct");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops at once on a rejected key", async () => {
+    const fetchImpl = vi.fn(async () => reply(401, {}));
+    await expect(interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "a/b,c/d" })).rejects.toMatchObject({ code: "auth" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("reports when every model is retired", async () => {
     const fetchImpl = vi.fn(async () => reply(410, {}));
     await expect(interpretWithNvidia(sample.facts, { ...opts(fetchImpl), model: "a/b,c/d" })).rejects.toMatchObject({ code: "unavailable" });

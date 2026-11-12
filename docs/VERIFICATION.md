@@ -41,7 +41,7 @@ The same comparison also runs live in every visitor's browser (the *Engine verif
 
 ## 4. Dashboard unit tests (`npm test`)
 
-**114 passed** across 12 files:
+**116 passed** across 12 files:
 
 | Area | What is tested |
 |---|---|
@@ -61,7 +61,7 @@ LLM function details:
 | Facts allowlist | Accepts all 7 real facts documents; rejects injected text, unknown keys, oversized or non-finite input |
 | Grounding check | TypeScript and Python agree on all 11 shared cases |
 | Request handler | Cache; per-minute limit; daily cap; origin check; missing key; storage failure; every provider error mapped to an HTTP status |
-| NVIDIA provider (free) | OpenAI-compatible request with the notebook prompt and guided JSON; key only in the header; retry without guided JSON; skip retired models (HTTP 410); JSON inside reasoning text; auth, rate-limit, error, bad-JSON and truncation mapping |
+| NVIDIA provider (free) | OpenAI-compatible request with the notebook prompt and guided JSON; key only in the header; retry without guided JSON; skip retired, failing or slow models within the time budget; stop at once on a rejected key; JSON inside reasoning text; auth, rate-limit, error, bad-JSON and truncation mapping |
 | Claude provider | Request shape (prompt, structured output, effort, refusal-fallback beta); retry without the beta; refusal, truncation and bad JSON; SDK error mapping |
 
 ## 5. Production build in a browser (`netlify serve`)
@@ -85,5 +85,5 @@ LLM function details:
 **A live LLM call.** No `NVIDIA_API_KEY` or `ANTHROPIC_API_KEY` exists on this machine, so both request paths are covered by mocked tests, not real calls.
 
 After deploying with the key:
-- open *AI Interpretation* and confirm the source badge reads "LLM · deepseek-ai/deepseek-v4.1-flash" (or the model you set);
+- open *AI Interpretation* and confirm the source badge reads "LLM · openai/gpt-oss-20b" (or the model you set);
 - confirm the grounding badge reads "All N figures verified".

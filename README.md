@@ -57,10 +57,12 @@ Browser (static site on Netlify)
   React + TypeScript UI  <->  Web Worker running Pyodide + forecast_core.py   (all models, metrics, facts)
                          ->  POST /api/interpret (facts only)
 
-Netlify Function /api/interpret (TypeScript)
+Netlify Functions /api/interpret + background /api/interpret-run (TypeScript)
   validate facts (allowlist) -> cache / rate limit / daily cap -> LLM: NVIDIA API Catalog (free) or Claude
   (key from a secret env var)
   -> grounding check (every number must exist in the facts) -> JSON
+  Free LLM endpoints can be slow, so the model call runs in a background function (up to 15 min):
+  POST answers 202 + job id at once; the page polls GET ?job=<id> until the result is stored (Blobs).
   If no key, an error or a rate limit: the dashboard shows the engine's rule-based interpretation, labelled.
 ```
 
@@ -134,7 +136,7 @@ cd app && npm run build
 | Command | What it checks |
 |---|---|
 | `pytest tests/python` | 31 tests: metrics, leakage, notebook parity, grounding |
-| `npm test` | 116 tests: UI logic, charts, LLM function, validation, grounding parity with Python |
+| `npm test` | 124 tests: UI logic, charts, LLM function, validation, grounding parity with Python |
 | `npm run parity` | The engine on WebAssembly vs the notebook (default scenario + 18 replay steps) |
 | `npm run build` | Typecheck + production build |
 

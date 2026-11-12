@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Interpretation } from "./grounding";
-import { handleInterpret, type HandlerDeps } from "./handler";
+import { handleInterpret, runInterpretJob, type HandlerDeps, type JobRunner } from "./handler";
 import { createLimits, memoryStore, type KeyValueStore } from "./limits";
 import { ProviderError, type ProviderResult } from "./provider-anthropic";
 
@@ -109,5 +109,80 @@ describe("handleInterpret", () => {
     const broken: KeyValueStore = { get: async () => { throw new Error("down"); }, set: async () => { throw new Error("down"); } };
     const response = await handleInterpret(post({ facts: sample.facts }), "1.2.3.4", { ...deps, limits: createLimits(broken, { perMinute: 6, dailyCap: 200 }) });
     expect(response.status).toBe(200);
+  });
+});
+
+describe("background jobs", () => {
+  let deps: HandlerDeps;
+  let callModel: ReturnType<typeof vi.fn<(facts: unknown) => Promise<ProviderResult>>>;
+  let started: { facts: unknown; job: string; token: string }[];
+  let store: KeyValueStore;
+
+  beforeEach(() => {
+    callModel = vi.fn<(facts: unknown) => Promise<ProviderResult>>(async () => ({ interpretation: sample.rule_based, model: "openai/gpt-oss-20b" }));
+    started = [];
+    store = memoryStore();
+    const jobs: JobRunner = { store, secret: "job-secret", start: async (body) => { started.push(body); return true; } };
+    deps = {
+      apiKey: "test-key", provider: "nvidia", model: "openai/gpt-oss-20b", promptVersion: "v1",
+      limits: createLimits(store, { perMinute: 6, dailyCap: 200 }), callModel,
+      now: () => new Date("2026-11-12T10:00:00Z"), jobs,
+    };
+  });
+
+  const runRequest = (body: unknown) =>
+    new Request("https://flowcast.example/api/interpret-run", { method: "POST", body: JSON.stringify(body) });
+  const poll = (job: string) => handleInterpret(new Request(`${URL_}?job=${job}`), "1.2.3.4", deps);
+
+  it("answers 202 with a job, runs it in the background and serves the result by polling", async () => {
+    const first = await handleInterpret(post({ facts: sample.facts }), "1.2.3.4", deps);
+    expect(first.status).toBe(202);
+    const { job } = await first.json();
+    expect(job).toMatch(/^[0-9a-f]{64}$/);
+    expect(callModel).not.toHaveBeenCalled();
+    expect((await poll(job)).status).toBe(202);
+
+    // A repeat POST while the job runs does not start a second run or use the rate limit.
+    expect((await handleInterpret(post({ facts: sample.facts }), "1.2.3.4", deps)).status).toBe(202);
+    expect(started).toHaveLength(1);
+
+    expect(await runInterpretJob(runRequest(started[0]), deps)).toBe("done");
+    const done = await poll(job);
+    expect(done.status).toBe(200);
+    const body = await done.json();
+    expect(body.grounding.passed).toBe(true);
+    expect(body.source).toEqual({ provider: "nvidia", model: "openai/gpt-oss-20b" });
+    expect((await (await handleInterpret(post({ facts: sample.facts }), "1.2.3.4", deps)).json()).cached).toBe(true);
+  });
+
+  it("stores a failed run as an error the poll reports", async () => {
+    const { job } = await (await handleInterpret(post({ facts: sample.facts }), "1.2.3.4", deps)).json();
+    callModel.mockRejectedValueOnce(new ProviderError("timeout", "The LLM did not answer in time."));
+    expect(await runInterpretJob(runRequest(started[0]), deps)).toBe("timeout");
+    const failed = await poll(job);
+    expect(failed.status).toBe(504);
+    expect((await failed.json()).error).toBe("timeout");
+  });
+
+  it("ignores background requests without a valid token or with other facts", async () => {
+    await handleInterpret(post({ facts: sample.facts }), "1.2.3.4", deps);
+    const valid = started[0];
+    expect(await runInterpretJob(runRequest({ ...valid, token: "0".repeat(64) }), deps)).toBe("bad_token");
+    const other = structuredClone(sample.facts) as Record<string, any>;
+    other.trend.latest_units += 1;
+    expect(await runInterpretJob(runRequest({ ...valid, facts: other }), deps)).toBe("job_mismatch");
+    expect(callModel).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed and unknown job ids", async () => {
+    expect((await poll("../etc")).status).toBe(400);
+    expect((await poll("a".repeat(64))).status).toBe(404);
+  });
+
+  it("falls back to a direct call when the background run cannot start", async () => {
+    deps.jobs = { ...deps.jobs!, start: async () => false };
+    const response = await handleInterpret(post({ facts: sample.facts }), "1.2.3.4", deps);
+    expect(response.status).toBe(200);
+    expect(callModel).toHaveBeenCalledTimes(1);
   });
 });

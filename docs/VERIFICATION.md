@@ -41,7 +41,7 @@ The same comparison also runs live in every visitor's browser (the *Engine verif
 
 ## 4. Dashboard unit tests (`npm test`)
 
-**116 passed** across 12 files:
+**124 passed** across 12 files:
 
 | Area | What is tested |
 |---|---|
@@ -51,7 +51,7 @@ The same comparison also runs live in every visitor's browser (the *Engine verif
 | Engine client | Latest request wins; worker crash, restart and give-up |
 | Charts | Option builders on the real snapshot; hidden models; uncertainty layers |
 | "Show the math" | Reproduces 2,391 / 17,274 |
-| LLM client | Status check; fallback codes; cancellation |
+| LLM client | Job polling; status check; fallback codes; cancellation |
 | LLM function | See the next table |
 
 LLM function details:
@@ -60,7 +60,7 @@ LLM function details:
 |---|---|
 | Facts allowlist | Accepts all 7 real facts documents; rejects injected text, unknown keys, oversized or non-finite input |
 | Grounding check | TypeScript and Python agree on all 11 shared cases |
-| Request handler | Cache; per-minute limit; daily cap; origin check; missing key; storage failure; every provider error mapped to an HTTP status |
+| Request handler | Background jobs (202 + job id, polling, signed run token, failed-run reporting, direct-call fallback); cache; per-minute limit; daily cap; origin check; missing key; storage failure; every provider error mapped to an HTTP status |
 | NVIDIA provider (free) | OpenAI-compatible request with the notebook prompt and guided JSON; key only in the header; retry without guided JSON; skip retired, failing or slow models within the time budget; stop at once on a rejected key; JSON inside reasoning text; auth, rate-limit, error, bad-JSON and truncation mapping |
 | Claude provider | Request shape (prompt, structured output, effort, refusal-fallback beta); retry without the beta; refusal, truncation and bad JSON; SDK error mapping |
 

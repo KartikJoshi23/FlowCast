@@ -1,7 +1,9 @@
 import type { Facts, GroundingResult, Interpretation } from "../data/types";
 
 export const INTERPRET_URL = "/api/interpret";
-export const CLIENT_TIMEOUT_MS = 45_000;   // below the platform's 60 s function limit
+/** Total wait for an interpretation, including the background run on slow free endpoints. */
+export const CLIENT_TIMEOUT_MS = 150_000;
+export const POLL_INTERVAL_MS = 2_500;
 
 export interface InterpretSuccess {
   interpretation: Interpretation;
@@ -14,6 +16,16 @@ export interface InterpretSuccess {
 export type InterpretOutcome =
   | { ok: true; data: InterpretSuccess }
   | { ok: false; code: string; message: string };
+
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
 
 /** Call the server-side LLM function. Never throws; every failure becomes a reason for the fallback. */
 export async function requestInterpretation(facts: Facts, signal?: AbortSignal): Promise<InterpretOutcome> {
@@ -29,14 +41,35 @@ export async function requestInterpretation(facts: Facts, signal?: AbortSignal):
     });
   } catch (error) {
     if (signal?.aborted) return { ok: false, code: "cancelled", message: "Superseded by newer data." };
-    if (timeout.aborted) return { ok: false, code: "timeout", message: "The LLM did not answer within 45 seconds." };
+    if (timeout.aborted) return { ok: false, code: "timeout", message: "The LLM did not answer within 150 seconds." };
     return { ok: false, code: "network", message: error instanceof Error ? error.message : "Network error." };
   }
+  let outcome = await readOutcome(response);
+  // 202: the model runs in a background function; poll the job until it finishes.
+  while ("pending" in outcome) {
+    const job = outcome.pending;
+    try {
+      await sleep(POLL_INTERVAL_MS, combined);
+      response = await fetch(`${INTERPRET_URL}?job=${encodeURIComponent(job)}`, { method: "GET", signal: combined });
+    } catch (error) {
+      if (signal?.aborted) return { ok: false, code: "cancelled", message: "Superseded by newer data." };
+      if (timeout.aborted) return { ok: false, code: "timeout", message: "The LLM did not answer within 150 seconds." };
+      return { ok: false, code: "network", message: error instanceof Error ? error.message : "Network error." };
+    }
+    outcome = await readOutcome(response);
+  }
+  return outcome;
+}
+
+type Body = InterpretSuccess & { error?: string; message?: string; status?: string; job?: string };
+
+async function readOutcome(response: Response): Promise<InterpretOutcome | { pending: string }> {
   const type = response.headers.get("content-type") ?? "";
   if (!type.includes("application/json")) {
     return { ok: false, code: "unavailable", message: "The interpretation service is not running here (static preview)." };
   }
-  const body = (await response.json().catch(() => null)) as (InterpretSuccess & { error?: string; message?: string }) | null;
+  const body = (await response.json().catch(() => null)) as Body | null;
+  if (response.status === 202 && body?.status === "pending" && typeof body.job === "string") return { pending: body.job };
   if (!response.ok || !body || body.error) {
     return { ok: false, code: body?.error ?? `http_${response.status}`, message: body?.message ?? `The service answered HTTP ${response.status}.` };
   }

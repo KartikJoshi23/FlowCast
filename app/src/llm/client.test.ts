@@ -23,6 +23,34 @@ describe("requestInterpretation", () => {
     expect(await requestInterpretation({ a: 1 })).toMatchObject({ ok: false, code: "unavailable" });
   });
 
+  it("polls a background job until the result is ready", async () => {
+    vi.useFakeTimers();
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(202, { status: "pending", job: "abc" }))
+      .mockResolvedValueOnce(json(202, { status: "pending", job: "abc" }))
+      .mockResolvedValueOnce(json(200, { interpretation: { caveats: [] }, grounding: { passed: true }, source: { provider: "nvidia", model: "m" }, generated_at: "t", cached: false }));
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = requestInterpretation({ a: 1 });
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(await pending).toMatchObject({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/interpret?job=abc");
+    vi.useRealTimers();
+  });
+
+  it("reports a failed background job", async () => {
+    vi.useFakeTimers();
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json(202, { status: "pending", job: "abc" }))
+      .mockResolvedValueOnce(json(504, { error: "timeout", message: "The LLM did not answer in time." })));
+    const pending = requestInterpretation({ a: 1 });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(await pending).toEqual({ ok: false, code: "timeout", message: "The LLM did not answer in time." });
+    vi.useRealTimers();
+  });
+
   it("reports network failures and cancellations", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
     expect(await requestInterpretation({ a: 1 })).toMatchObject({ ok: false, code: "network" });

@@ -80,8 +80,10 @@ const JOB_ID = /^[0-9a-f]{64}$/;
 const jobKey = (job: string) => `jobs/${job}`;
 const jobToken = (secret: string, job: string) => sha256Hex(`flowcast-job\n${secret}\n${job}`);
 
-const cacheKeyFor = (deps: HandlerDeps, facts: Facts) =>
-  sha256Hex(`${deps.provider}\n${deps.model}\n${deps.promptVersion}\n${JSON.stringify(facts)}`);
+/** Bump to invalidate every cached interpretation (e.g. after changing how answers are chosen). */
+const CACHE_VERSION = "2";
+const cacheKeyFor =(deps: HandlerDeps, facts: Facts) =>
+  sha256Hex(`${CACHE_VERSION}\n${deps.provider}\n${deps.model}\n${deps.promptVersion}\n${JSON.stringify(facts)}`);
 
 async function readJob(store: KeyValueStore, job: string): Promise<JobRecord | null> {
   try {

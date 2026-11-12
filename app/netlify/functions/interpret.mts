@@ -1,9 +1,11 @@
 /**
  * Netlify Function: POST /api/interpret
  *
- * The only place the LLM API key exists. It is read from the ANTHROPIC_API_KEY environment
- * variable (set in Netlify as a secret, scoped to Functions) and never sent to the browser.
- * Optional: LLM_MODEL (default claude-opus-5-5), LLM_DAILY_CAP (default 200), LLM_PER_MINUTE (default 6).
+ * The only place the LLM API key exists. It is read from an environment variable (set in Netlify
+ * as a secret, scoped to Functions) and never sent to the browser:
+ *   NVIDIA_API_KEY     free key from build.nvidia.com (used first if set; default model meta/llama-3.3-70b-instruct)
+ *   ANTHROPIC_API_KEY  Claude (default model claude-opus-5-5)
+ * Optional: LLM_MODEL (override the model), LLM_DAILY_CAP (default 200), LLM_PER_MINUTE (default 6).
  */
 import { getStore } from "@netlify/blobs";
 import type { Config, Context } from "@netlify/functions";
@@ -11,6 +13,7 @@ import { handleInterpret } from "../lib/handler";
 import { createLimits, memoryStore, sha256Hex, type KeyValueStore } from "../lib/limits";
 import prompt from "../lib/interpretation-prompt.json";
 import { DEFAULT_MODEL, interpretWithClaude } from "../lib/provider-anthropic";
+import { interpretWithNvidia, NVIDIA_DEFAULT_MODEL } from "../lib/provider-nvidia";
 
 const fallbackStore = memoryStore();
 
@@ -37,8 +40,10 @@ const positiveInt = (value: string | undefined, fallback: number) => {
 let promptVersion: Promise<string> | null = null;
 
 export default async (request: Request, context: Context) => {
-  const model = process.env.LLM_MODEL?.trim() || DEFAULT_MODEL;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const nvidiaKey = process.env.NVIDIA_API_KEY?.trim();
+  const provider = nvidiaKey ? "nvidia" : "anthropic";
+  const apiKey = nvidiaKey || process.env.ANTHROPIC_API_KEY?.trim();
+  const model = process.env.LLM_MODEL?.trim() || (provider === "nvidia" ? NVIDIA_DEFAULT_MODEL : DEFAULT_MODEL);
   promptVersion ??= sha256Hex(JSON.stringify(prompt));
   const limits = createLimits(openStore(), {
     perMinute: positiveInt(process.env.LLM_PER_MINUTE, 6),
@@ -46,11 +51,14 @@ export default async (request: Request, context: Context) => {
   });
   return handleInterpret(request, context.ip, {
     apiKey,
+    provider,
     model,
     promptVersion: await promptVersion,
     limits,
     now: () => new Date(),
-    callModel: (facts) => interpretWithClaude(facts, { apiKey: apiKey ?? "", model, timeoutMs: 40_000 }),
+    callModel: (facts) => provider === "nvidia"
+      ? interpretWithNvidia(facts, { apiKey: apiKey ?? "", model, timeoutMs: 40_000 })
+      : interpretWithClaude(facts, { apiKey: apiKey ?? "", model, timeoutMs: 40_000 }),
   });
 };
 

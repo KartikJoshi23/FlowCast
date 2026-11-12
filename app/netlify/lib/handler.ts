@@ -17,13 +17,15 @@ export const MAX_BODY_BYTES = 64 * 1024;
 export interface InterpretSuccess {
   interpretation: Interpretation;
   grounding: GroundingResult;
-  source: { provider: "anthropic"; model: string };
+  source: { provider: string; model: string };
   generated_at: string;
   cached: boolean;
 }
 
 export interface HandlerDeps {
   apiKey: string | undefined;
+  /** "nvidia" or "anthropic"; reported to the page, never the key. */
+  provider: string;
   model: string;
   promptVersion: string;
   limits: Limits;
@@ -54,7 +56,7 @@ const STATUS_FOR: Record<ProviderErrorCode, number> = {
 export async function handleInterpret(request: Request, clientIp: string, deps: HandlerDeps): Promise<Response> {
   // GET reports whether an LLM is configured (never the key), so the page can skip a doomed POST.
   if (request.method === "GET") {
-    return json(200, { configured: Boolean(deps.apiKey), provider: "anthropic", model: deps.model });
+    return json(200, { configured: Boolean(deps.apiKey), provider: deps.provider, model: deps.model });
   }
   if (request.method !== "POST") return fail(405, "method_not_allowed", "Use GET or POST.", { allow: "GET, POST" });
 
@@ -110,7 +112,7 @@ export async function handleInterpret(request: Request, clientIp: string, deps: 
   const success: InterpretSuccess = {
     interpretation: result.interpretation,
     grounding: groundingCheck(result.interpretation, facts),
-    source: { provider: "anthropic", model: result.model },
+    source: { provider: deps.provider, model: result.model },
     generated_at: deps.now().toISOString(),
     cached: false,
   };

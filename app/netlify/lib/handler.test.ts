@@ -22,6 +22,7 @@ describe("handleInterpret", () => {
     callModel = vi.fn<(facts: unknown) => Promise<ProviderResult>>(async () => ({ interpretation: sample.rule_based, model: "claude-opus-5-5" }));
     deps = {
       apiKey: "test-key",
+      provider: "anthropic",
       model: "claude-opus-5-5",
       promptVersion: "v1",
       limits: createLimits(memoryStore(), { perMinute: 6, dailyCap: 200 }),

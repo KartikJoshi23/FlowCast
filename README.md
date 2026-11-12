@@ -58,7 +58,8 @@ Browser (static site on Netlify)
                          ->  POST /api/interpret (facts only)
 
 Netlify Function /api/interpret (TypeScript)
-  validate facts (allowlist) -> cache / rate limit / daily cap -> Claude (key from a secret env var)
+  validate facts (allowlist) -> cache / rate limit / daily cap -> LLM: NVIDIA API Catalog (free) or Claude
+  (key from a secret env var)
   -> grounding check (every number must exist in the facts) -> JSON
   If no key, an error or a rate limit: the dashboard shows the engine's rule-based interpretation, labelled.
 ```
@@ -101,7 +102,7 @@ Requirements: Python 3.14 (via [uv](https://docs.astral.sh/uv/)) and Node 22+.
    uv pip install --python .venv -r requirements.txt
    ```
    Open the notebook with the `.venv` kernel and run all cells (about 1 minute).
-   - **LLM:** set `ANTHROPIC_API_KEY` in your environment to get Claude's interpretation. Without it, the notebook uses the labelled rule-based fallback.
+   - **LLM:** set `NVIDIA_API_KEY` (free, from build.nvidia.com) or `ANTHROPIC_API_KEY` in your environment. Without either, the notebook uses the labelled rule-based fallback.
    - **Colab:** the notebook also runs in Colab (it downloads the data with `kagglehub`), with possible last-decimal differences.
 2. **Export for the dashboard** (only needed after changing the notebook):
    ```bash
@@ -133,7 +134,7 @@ cd app && npm run build
 | Command | What it checks |
 |---|---|
 | `pytest tests/python` | 31 tests: metrics, leakage, notebook parity, grounding |
-| `npm test` | 102 tests: UI logic, charts, LLM function, validation, grounding parity with Python |
+| `npm test` | 111 tests: UI logic, charts, LLM function, validation, grounding parity with Python |
 | `npm run parity` | The engine on WebAssembly vs the notebook (default scenario + 18 replay steps) |
 | `npm run build` | Typecheck + production build |
 
@@ -157,13 +158,15 @@ See [`docs/VERIFICATION.md`](docs/VERIFICATION.md) for the results.
    - functions `netlify/functions`
    - Node 22
    - security headers
-3. **Add the LLM key** (optional; without it the rule-based interpretation is shown) under *Project configuration → Environment variables → Add a variable*:
-   - `ANTHROPIC_API_KEY`: tick **Contains secret values**, scope **Functions**, contexts **Production** and **Deploy Previews**.
-   - Optional: `LLM_MODEL` (default `claude-opus-5-5`; e.g. `claude-haiku-5-5` costs far less), `LLM_DAILY_CAP` (default 200), `LLM_PER_MINUTE` (default 6).
+3. **Add the free LLM key.** The key is a password for the AI service, so it is stored in Netlify, never in the code or on GitHub. Only the server-side function can read it.
+   - Get a free key at [build.nvidia.com](https://build.nvidia.com): sign in, open a model (e.g. *meta/llama-3.3-70b-instruct*), click **Get API Key**, and copy the key (it starts with `nvapi-`).
+   - In Netlify: *Project configuration → Environment variables → Add a variable*. Key `NVIDIA_API_KEY`, value = your key, tick **Contains secret values**, scope **Functions**, all deploy contexts.
+   - Optional: `LLM_MODEL` to use another NVIDIA model (default `meta/llama-3.3-70b-instruct`), `LLM_DAILY_CAP` (default 200), `LLM_PER_MINUTE` (default 6). A paid `ANTHROPIC_API_KEY` also works and is used only if no NVIDIA key is set.
    - Then **Deploys → Trigger deploy**: environment variables apply to new deploys only.
+   - Without any key the dashboard still works and shows the labelled rule-based interpretation.
 4. **Check the live site:**
    - The status bar reaches *Engine verified · matches notebook*.
-   - *AI Interpretation* shows "LLM · claude-…" with all figures verified.
+   - *AI Interpretation* shows "LLM · meta/llama-3.3-70b-instruct" with the grounding badge.
    - *Close Aug 2023* updates every view.
 5. **Mind the credits.** On Netlify's credit-based Free plan each production deploy costs 15 of the 300 monthly credits, while deploy previews are free. Pyodide loads from jsDelivr, so it uses no Netlify bandwidth.
 

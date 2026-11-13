@@ -10,6 +10,7 @@ It has two deliverables:
 |---|---|
 | Jupyter notebook covering all 7 slide tasks plus the LLM interpretation | [`notebooks/beverage_demand_forecasting.ipynb`](notebooks/beverage_demand_forecasting.ipynb) |
 | Interactive React dashboard (Netlify) that runs the same pipeline live | [`app/`](app/) |
+| Executive summary (PDF, 1.5 pages) | [`docs/Executive_Summary.pdf`](docs/Executive_Summary.pdf) |
 
 > **Data.** Kaggle *FMCG Daily Sales Data (2022–2024)* by Beata Faron, **CC0 Public Domain**, synthetic. Its only beverage product, SKU **JU-021** (a juice launched on 11 Jul 2022 in 3 regions × 3 channels), stands in for the new flavored water.
 >
@@ -90,7 +91,7 @@ app/                                           dashboard (Vite + React 19 + Type
   netlify/functions/interpret.mts              the LLM endpoint
   netlify/lib/                                 validation, grounding, provider, limits, handler (+ tests)
   scripts/pyodide-parity.mjs                   WebAssembly <-> notebook parity check
-docs/VERIFICATION.md                           test results, live checks and final audit
+docs/                                          executive summary (PDF), verification record
 netlify.toml                                   build, function, security headers
 ```
 
